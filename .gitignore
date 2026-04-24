@@ -4,3 +4,7 @@ dist/
 *.db
 *.db-journal
 .DS_Store
+ui/node_modules/
+ui/dist/
+dist/
+test-screenshots/

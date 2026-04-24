@@ -7,6 +7,7 @@ import path from "node:path";
 import { SessionStore } from "./session/store.js";
 import { SessionManager } from "./session/manager.js";
 import { createDoHandler } from "./api/do.js";
+import { createWsServer, handleUpgrade } from "./api/ws.js";
 
 // ---------------------------------------------------------------------------
 // Auth token — auto-generated on first run, persisted to .aterm-token
@@ -72,6 +73,9 @@ app.get("/health", (c) => {
 // The API
 app.post("/api/do", createDoHandler(mgr));
 
+// WebSocket server for terminal I/O
+const wss = createWsServer(mgr, AUTH_TOKEN);
+
 // ---------------------------------------------------------------------------
 // Start
 // ---------------------------------------------------------------------------
@@ -83,7 +87,17 @@ console.log(`URL:   http://localhost:${PORT}?token=${AUTH_TOKEN}`);
 if (autoStarted > 0) console.log(`Auto-started: ${autoStarted} session(s)`);
 console.log("─".repeat(60));
 
-serve({ fetch: app.fetch, port: PORT });
+const httpServer = serve({ fetch: app.fetch, port: PORT });
+
+// Hook WebSocket upgrade into the HTTP server
+httpServer.on("upgrade", (req, socket, head) => {
+  const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
+  if (url.pathname.startsWith("/ws/")) {
+    handleUpgrade(wss, AUTH_TOKEN, req, socket, head);
+  } else {
+    socket.destroy();
+  }
+});
 
 // Graceful shutdown
 process.on("SIGTERM", () => { mgr.destroy(); process.exit(0); });
