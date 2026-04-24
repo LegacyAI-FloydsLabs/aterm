@@ -52,6 +52,34 @@ export class SessionStore {
 
       CREATE INDEX IF NOT EXISTS idx_cmd_history_session
         ON command_history(session_id, created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS checkpoints (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        scrollback TEXT,
+        env TEXT,             -- JSON
+        cwd TEXT,
+        command_history TEXT, -- JSON array
+        scratchpad TEXT,
+        session_config TEXT,  -- JSON (full session config at checkpoint time)
+        created_at INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_checkpoints_session
+        ON checkpoints(session_id, created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS recordings (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        events TEXT,          -- JSON array of recorded events
+        started_at INTEGER NOT NULL,
+        ended_at INTEGER
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_recordings_session
+        ON recordings(session_id, started_at);
     `);
   }
 
@@ -205,6 +233,103 @@ export class SessionStore {
       count++;
     }
     return count;
+  }
+
+  // -----------------------------------------------------------------------
+  // Checkpoints
+  // -----------------------------------------------------------------------
+
+  /** Save a checkpoint for a session */
+  saveCheckpoint(
+    sessionId: string,
+    name: string,
+    data: { scrollback: string; env: Record<string, string> | null; cwd: string; commandHistory: string[]; scratchpad: string; sessionConfig: any },
+  ): string {
+    const id = uuid();
+    this.db.prepare(`
+      INSERT INTO checkpoints (id, session_id, name, scrollback, env, cwd, command_history, scratchpad, session_config, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id, sessionId, name, data.scrollback,
+      data.env ? JSON.stringify(data.env) : null,
+      data.cwd, JSON.stringify(data.commandHistory),
+      data.scratchpad, JSON.stringify(data.sessionConfig), Date.now(),
+    );
+    return id;
+  }
+
+  /** List checkpoints for a session */
+  listCheckpoints(sessionId: string): Array<{ id: string; name: string; createdAt: number }> {
+    return (this.db.prepare(
+      "SELECT id, name, created_at FROM checkpoints WHERE session_id = ? ORDER BY created_at DESC"
+    ).all(sessionId) as any[]).map((r) => ({ id: r.id, name: r.name, createdAt: r.created_at }));
+  }
+
+  /** Get a checkpoint by ID */
+  getCheckpoint(checkpointId: string): any | undefined {
+    const r = this.db.prepare("SELECT * FROM checkpoints WHERE id = ?").get(checkpointId) as any;
+    if (!r) return undefined;
+    return {
+      id: r.id,
+      sessionId: r.session_id,
+      name: r.name,
+      scrollback: r.scrollback,
+      env: r.env ? JSON.parse(r.env) : null,
+      cwd: r.cwd,
+      commandHistory: r.command_history ? JSON.parse(r.command_history) : [],
+      scratchpad: r.scratchpad,
+      sessionConfig: r.session_config ? JSON.parse(r.session_config) : null,
+      createdAt: r.created_at,
+    };
+  }
+
+  // -----------------------------------------------------------------------
+  // Recordings
+  // -----------------------------------------------------------------------
+
+  /** Start a recording */
+  startRecording(sessionId: string, name: string): string {
+    const id = uuid();
+    this.db.prepare(`
+      INSERT INTO recordings (id, session_id, name, events, started_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(id, sessionId, name, "[]", Date.now());
+    return id;
+  }
+
+  /** Append an event to a recording */
+  appendRecordingEvent(recordingId: string, event: any): void {
+    const r = this.db.prepare("SELECT events FROM recordings WHERE id = ?").get(recordingId) as any;
+    if (!r) return;
+    const events = JSON.parse(r.events);
+    events.push({ ...event, timestamp: Date.now() });
+    this.db.prepare("UPDATE recordings SET events = ? WHERE id = ?").run(JSON.stringify(events), recordingId);
+  }
+
+  /** Stop a recording */
+  stopRecording(recordingId: string): void {
+    this.db.prepare("UPDATE recordings SET ended_at = ? WHERE id = ?").run(Date.now(), recordingId);
+  }
+
+  /** Get a recording */
+  getRecording(recordingId: string): any | undefined {
+    const r = this.db.prepare("SELECT * FROM recordings WHERE id = ?").get(recordingId) as any;
+    if (!r) return undefined;
+    return {
+      id: r.id,
+      sessionId: r.session_id,
+      name: r.name,
+      events: JSON.parse(r.events),
+      startedAt: r.started_at,
+      endedAt: r.ended_at,
+    };
+  }
+
+  /** List recordings for a session */
+  listRecordings(sessionId: string): Array<{ id: string; name: string; startedAt: number; endedAt: number | null }> {
+    return (this.db.prepare(
+      "SELECT id, name, started_at, ended_at FROM recordings WHERE session_id = ? ORDER BY started_at DESC"
+    ).all(sessionId) as any[]).map((r) => ({ id: r.id, name: r.name, startedAt: r.started_at, endedAt: r.ended_at }));
   }
 
   /** Close the database connection */

@@ -8,11 +8,13 @@
 import type { Context } from "hono";
 import type { SessionManager, SessionWithState } from "../session/manager.js";
 import type { DistillMode } from "../intel/distill.js";
+import { notifySessionCreated, notifySessionDeleted } from "./ws.js";
 import { setTimeout as delay } from "node:timers/promises";
 
 type Action =
   | "list" | "read" | "run" | "stop" | "start" | "cancel" | "answer"
-  | "create" | "delete" | "note" | "search" | "broadcast" | "history";
+  | "create" | "delete" | "note" | "search" | "broadcast" | "history"
+  | "checkpoint" | "record";
 
 interface DoRequest {
   action: Action;
@@ -42,6 +44,7 @@ interface DoRequest {
 const VALID_ACTIONS = new Set<string>([
   "list", "read", "run", "stop", "start", "cancel", "answer",
   "create", "delete", "note", "search", "broadcast", "history",
+  "checkpoint", "record",
 ]);
 
 function hint(session: SessionWithState | undefined): string {
@@ -104,6 +107,8 @@ export function createDoHandler(mgr: SessionManager) {
         case "search": return handleSearch(c, mgr, body);
         case "broadcast": return handleBroadcast(c, mgr, body);
         case "history": return handleHistory(c, mgr, body);
+        case "checkpoint": return handleCheckpoint(c, mgr, body);
+        case "record": return handleRecord(c, mgr, body);
         default: return c.json({ ok: false, error: "not implemented" }, 501);
       }
     } catch (err: any) {
@@ -274,6 +279,7 @@ function handleCreate(c: Context, mgr: SessionManager, body: DoRequest) {
     autoStart: body.auto_start,
   }, body.auto_start);
 
+  notifySessionCreated({ id: session.id, name: session.name, status: session.status });
   return c.json({
     ok: true,
     id: session.id,
@@ -286,6 +292,7 @@ function handleCreate(c: Context, mgr: SessionManager, body: DoRequest) {
 function handleDelete(c: Context, mgr: SessionManager, body: DoRequest) {
   if (!body.session) return c.json({ ok: false, error: "session required" }, 400);
   const deleted = mgr.delete(body.session);
+  if (deleted) notifySessionDeleted(body.session);
   return c.json({ ok: deleted, hint: deleted ? "Session deleted." : "Session not found.", actions: ["list", "create"] });
 }
 
@@ -348,4 +355,69 @@ function handleHistory(c: Context, mgr: SessionManager, body: DoRequest) {
   if (!body.session) return c.json({ ok: false, error: "session required" }, 400);
   const history = mgr.history(body.session, body.lines ?? 50);
   return c.json({ ok: true, history, hint: `${history.length} commands in history.` });
+}
+
+// ---------------------------------------------------------------------------
+// Checkpoint & Recording handlers
+// ---------------------------------------------------------------------------
+
+function handleCheckpoint(c: Context, mgr: SessionManager, body: DoRequest) {
+  if (!body.session) return c.json({ ok: false, error: "session required" }, 400);
+  const session = mgr.get(body.session);
+  if (!session) return c.json({ ok: false, error: `session not found: ${body.session}` }, 404);
+
+  // input = checkpoint name for save, or checkpoint ID for restore
+  const sub = body.input ?? "save";
+
+  if (sub === "list") {
+    const checkpoints = mgr.listCheckpoints(session.id);
+    return c.json({ ok: true, checkpoints, hint: `${checkpoints.length} checkpoint(s).` });
+  }
+
+  if (sub.startsWith("restore:")) {
+    const cpId = sub.replace("restore:", "").trim();
+    const success = mgr.restoreCheckpoint(session.id, cpId);
+    return c.json({
+      ok: success,
+      hint: success ? "Checkpoint restored. Session restarted with saved state." : "Checkpoint not found.",
+    });
+  }
+
+  // Default: save a new checkpoint
+  const name = sub === "save" ? `checkpoint-${Date.now()}` : sub;
+  const cpId = mgr.saveCheckpoint(session.id, name);
+  return c.json({ ok: true, checkpoint_id: cpId, name, hint: `Checkpoint '${name}' saved.` });
+}
+
+function handleRecord(c: Context, mgr: SessionManager, body: DoRequest) {
+  if (!body.session) return c.json({ ok: false, error: "session required" }, 400);
+  const session = mgr.get(body.session);
+  if (!session) return c.json({ ok: false, error: `session not found: ${body.session}` }, 404);
+
+  const sub = body.input ?? "start";
+
+  if (sub === "start") {
+    const name = `recording-${Date.now()}`;
+    const recId = mgr.startRecording(session.id, name);
+    return c.json({ ok: true, recording_id: recId, name, hint: "Recording started." });
+  }
+
+  if (sub.startsWith("stop:")) {
+    const recId = sub.replace("stop:", "").trim();
+    mgr.stopRecording(recId);
+    return c.json({ ok: true, hint: "Recording stopped." });
+  }
+
+  if (sub === "list") {
+    const recordings = mgr.listRecordings(session.id);
+    return c.json({ ok: true, recordings, hint: `${recordings.length} recording(s).` });
+  }
+
+  if (sub.startsWith("get:")) {
+    const recId = sub.replace("get:", "").trim();
+    const recording = mgr.getRecording(recId);
+    return c.json({ ok: !!recording, recording, hint: recording ? "Recording retrieved." : "Recording not found." });
+  }
+
+  return c.json({ ok: false, error: "input must be: start, stop:<id>, list, or get:<id>" }, 400);
 }

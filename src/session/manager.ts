@@ -191,6 +191,92 @@ export class SessionManager extends EventEmitter {
     return this.store.importTccAgents(agents);
   }
 
+  // -----------------------------------------------------------------------
+  // Checkpoints
+  // -----------------------------------------------------------------------
+
+  /** Save a checkpoint of the current session state */
+  saveCheckpoint(idOrName: string, name: string): string {
+    const session = this.store.get(idOrName);
+    if (!session) throw new Error(`Session ${idOrName} not found`);
+    const pty = this.pool.get(session.id);
+    return this.store.saveCheckpoint(session.id, name, {
+      scrollback: pty?.scrollback.raw() ?? "",
+      env: session.env,
+      cwd: session.directory,
+      commandHistory: pty?.commandHistory ?? [],
+      scratchpad: session.scratchpad,
+      sessionConfig: {
+        name: session.name, command: session.command, directory: session.directory,
+        env: session.env, tags: session.tags,
+      },
+    });
+  }
+
+  /** Restore a checkpoint — kills current PTY, restores saved state */
+  restoreCheckpoint(idOrName: string, checkpointId: string): boolean {
+    const session = this.store.get(idOrName);
+    if (!session) return false;
+    const cp = this.store.getCheckpoint(checkpointId);
+    if (!cp || cp.sessionId !== session.id) return false;
+
+    // Kill current PTY
+    this.pool.kill(session.id);
+
+    // Update session with checkpoint data
+    this.store.update(session.id, { scratchpad: cp.scratchpad });
+
+    // Restart and replay scrollback
+    this.start(session.id);
+    // Wait a moment then write scrollback to the terminal display
+    // (The PTY is fresh, we just show the old output visually)
+    setTimeout(() => {
+      const pty = this.pool.get(session.id);
+      if (pty && cp.scrollback) {
+        // Inject scrollback into the buffer for display purposes
+        pty.scrollback.append(cp.scrollback);
+        this.emit("data", session.id, cp.scrollback);
+      }
+    }, 500);
+
+    return true;
+  }
+
+  /** List checkpoints for a session */
+  listCheckpoints(idOrName: string): Array<{ id: string; name: string; createdAt: number }> {
+    const session = this.store.get(idOrName);
+    if (!session) return [];
+    return this.store.listCheckpoints(session.id);
+  }
+
+  // -----------------------------------------------------------------------
+  // Recordings
+  // -----------------------------------------------------------------------
+
+  /** Start recording a session */
+  startRecording(idOrName: string, name: string): string {
+    const session = this.store.get(idOrName);
+    if (!session) throw new Error(`Session ${idOrName} not found`);
+    return this.store.startRecording(session.id, name);
+  }
+
+  /** Stop a recording */
+  stopRecording(recordingId: string): void {
+    this.store.stopRecording(recordingId);
+  }
+
+  /** Get a recording */
+  getRecording(recordingId: string): any {
+    return this.store.getRecording(recordingId);
+  }
+
+  /** List recordings for a session */
+  listRecordings(idOrName: string): any[] {
+    const session = this.store.get(idOrName);
+    if (!session) return [];
+    return this.store.listRecordings(session.id);
+  }
+
   /** Clean shutdown */
   destroy(): void {
     this.pool.destroyAll();

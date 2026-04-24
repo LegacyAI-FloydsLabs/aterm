@@ -1,11 +1,9 @@
 /**
- * Terminal component — xterm.js v6 + WebSocket integration.
+ * Terminal component — xterm.js v6 + WebSocket with auto-reconnect.
  *
- * Lifecycle:
- *   mount → create xterm → connect WS → receive scrollback → stream data
- *   unmount → close WS → dispose xterm → disconnect observer
- *
- * Guard: `disposed` ref prevents post-unmount writes to terminal.
+ * Phase 3: Added auto-reconnect with exponential backoff (1s→2s→4s→max 30s).
+ * Shows [reconnecting...] during reconnection attempts.
+ * Satisfies BLUEPRINT invariant 7: "WebSocket connections survive server restart."
  */
 import { useEffect, useRef, useCallback } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
@@ -23,12 +21,76 @@ interface Props {
 export function Terminal({ sessionId, onStateChange }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const disposedRef = useRef(false);
+  const termRef = useRef<XTerm | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout>>();
+  const attemptsRef = useRef(0);
 
-  const setupTerminal = useCallback(() => {
+  const connectWs = useCallback((term: XTerm) => {
+    if (disposedRef.current) return;
+
+    const url = wsUrl(sessionId);
+    const ws = new WebSocket(url);
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      attemptsRef.current = 0;
+    };
+
+    ws.onmessage = (e) => {
+      if (disposedRef.current) return;
+      try {
+        const msg = JSON.parse(e.data);
+        switch (msg.type) {
+          case "scrollback":
+          case "data":
+            term.write(msg.payload);
+            break;
+          case "state":
+            onStateChange?.(msg);
+            break;
+        }
+      } catch { /* ignore malformed */ }
+    };
+
+    ws.onclose = () => {
+      if (disposedRef.current) return;
+      wsRef.current = null;
+
+      // Auto-reconnect with backoff
+      const delay = Math.min(1000 * Math.pow(2, attemptsRef.current), 30000);
+      attemptsRef.current++;
+
+      term.write(`\r\n\x1b[33m[reconnecting in ${Math.round(delay / 1000)}s...]\x1b[0m`);
+
+      reconnectTimer.current = setTimeout(() => {
+        if (!disposedRef.current) {
+          term.write(`\r\n\x1b[33m[connecting...]\x1b[0m\r\n`);
+          connectWs(term);
+        }
+      }, delay);
+    };
+
+    ws.onerror = () => {
+      ws.close();
+    };
+
+    // Terminal input → WebSocket
+    term.onData((data) => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "input", payload: data }));
+      }
+    });
+  }, [sessionId, onStateChange]);
+
+  useEffect(() => {
     const el = containerRef.current;
-    if (!el || disposedRef.current) return;
+    if (!el) return;
 
-    // Create xterm instance
+    disposedRef.current = false;
+    attemptsRef.current = 0;
+
+    // Create xterm
     const term = new XTerm({
       cursorBlink: true,
       fontSize: 14,
@@ -51,83 +113,45 @@ export function Terminal({ sessionId, onStateChange }: Props) {
     term.loadAddon(webLinksAddon);
     term.open(el);
 
-    // Try WebGL renderer, fall back silently
     try {
       const webglAddon = new WebglAddon();
       webglAddon.onContextLoss(() => webglAddon.dispose());
       term.loadAddon(webglAddon);
-    } catch {
-      // WebGL not available — canvas renderer is fine
-    }
+    } catch { /* WebGL not available */ }
 
     fitAddon.fit();
+    termRef.current = term;
 
-    // Connect WebSocket
-    const url = wsUrl(sessionId);
-    const ws = new WebSocket(url);
-
-    ws.onmessage = (e) => {
-      if (disposedRef.current) return;
-      try {
-        const msg = JSON.parse(e.data);
-        switch (msg.type) {
-          case "scrollback":
-          case "data":
-            term.write(msg.payload);
-            break;
-          case "state":
-            onStateChange?.(msg);
-            break;
-        }
-      } catch {
-        // Ignore malformed messages
-      }
-    };
-
-    ws.onclose = () => {
-      if (!disposedRef.current) {
-        term.write("\r\n\x1b[33m[disconnected]\x1b[0m\r\n");
-      }
-    };
-
-    // Terminal input → WebSocket
-    term.onData((data) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: "input", payload: data }));
-      }
-    });
-
-    // Resize → WebSocket + PTY
+    // Resize observer
     const observer = new ResizeObserver(() => {
       if (disposedRef.current) return;
       fitAddon.fit();
-      if (ws.readyState === WebSocket.OPEN) {
+      const ws = wsRef.current;
+      if (ws?.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
       }
     });
     observer.observe(el);
 
+    // Connect WebSocket
+    connectWs(term);
+
     // Cleanup
     return () => {
       disposedRef.current = true;
+      clearTimeout(reconnectTimer.current);
       observer.disconnect();
-      ws.close();
+      wsRef.current?.close();
       term.dispose();
+      termRef.current = null;
     };
-  }, [sessionId, onStateChange]);
-
-  useEffect(() => {
-    disposedRef.current = false;
-    const cleanup = setupTerminal();
-    return () => {
-      cleanup?.();
-    };
-  }, [setupTerminal]);
+  }, [sessionId, connectWs]);
 
   return (
     <div
       ref={containerRef}
-      style={{ width: "100%", height: "100%", background: "#1e1e1e" }}
+      className="w-full h-full"
+      style={{ background: "#1e1e1e" }}
     />
   );
 }
