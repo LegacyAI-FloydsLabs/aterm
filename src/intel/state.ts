@@ -153,6 +153,17 @@ export class StateDetector {
         context.lastOutputAt > context.lastCommandSentAt;
 
       if (!context.commandPending || outputAfterCommand) {
+        const completedErrorMatch = context.commandPending
+          ? matchFirst(cleanRecent, ERROR_PATTERNS)
+          : null;
+        if (completedErrorMatch) {
+          return this._commit({
+            state: "error",
+            confidence: 0.85,
+            method: "error_pattern",
+            detail: `${completedErrorMatch.label} (command completed with error)`,
+          });
+        }
         return this._commit({
           state: "ready",
           confidence: 0.85,

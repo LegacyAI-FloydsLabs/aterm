@@ -30,7 +30,7 @@ import fs from "node:fs";
 const ANVIL_SERVER_PATH = process.env.ANVIL_SERVER_PATH
   ?? "/Volumes/SanDisk1Tb/open-anvil/mcp-server/server.js";
 
-const ANVIL_WS_PORT = process.env.ANVIL_WS_PORT ?? "7778";
+const ANVIL_WS_PORT = process.env.ANVIL_WS_PORT ?? "7777";
 const TOOL_TIMEOUT = parseInt(process.env.ANVIL_TIMEOUT ?? "30000", 10);
 
 /** Simplified bridge actions for Tier 1/2 agents */

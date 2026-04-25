@@ -10,6 +10,7 @@
  */
 import * as pty from "node-pty";
 import { EventEmitter } from "node:events";
+import path from "node:path";
 import { Scrollback } from "./scrollback.js";
 
 export interface PtyOptions {
@@ -40,8 +41,13 @@ export interface PtyInstance {
   // Command tracking — critical for Output Intelligence
   lastCommandSentAt: number | null;
   lastCommandText: string | null;
+  lastCommandOutputStartOffset: number | null;
   lastOutputAt: number | null;
+  commandActive: boolean;
+  currentCwd: string;
+  currentEnv: Record<string, string>;
   commandHistory: string[];
+  markSource: string;
 
   // Restart tracking
   restartCount: number;
@@ -72,8 +78,13 @@ export class PtyPool extends EventEmitter {
       restartPolicy: restartPolicy ?? DEFAULT_RESTART,
       lastCommandSentAt: null,
       lastCommandText: null,
+      lastCommandOutputStartOffset: null,
       lastOutputAt: null,
+      commandActive: false,
+      currentCwd: opts.cwd,
+      currentEnv: { ...(opts.env ?? {}) },
       commandHistory: [],
+      markSource: "",
       restartCount: 0,
       restartTimestamps: [],
       startedAt: null,
@@ -132,6 +143,7 @@ export class PtyPool extends EventEmitter {
 
       proc.onData((data: string) => {
         inst.scrollback.append(data);
+        inst.markSource += data;
         inst.lastOutputAt = Date.now();
         this.emit("data", inst.id, data);
       });
@@ -188,16 +200,43 @@ export class PtyPool extends EventEmitter {
     const inst = this.instances.get(id);
     if (!inst?.process) throw new Error(`PTY ${id} not running`);
 
-    inst.process.write(data);
-
-    // Track command (strip trailing \r\n for history)
+    // Track command before writing so synchronous PTY output cannot outrun metadata.
     const cleaned = data.replace(/[\r\n]+$/, "").trim();
     if (cleaned.length > 0) {
       inst.lastCommandSentAt = Date.now();
       inst.lastCommandText = cleaned;
+      inst.lastCommandOutputStartOffset = inst.markSource.length;
+      inst.commandActive = true;
+      this._trackShellState(inst, cleaned);
+    }
+
+    inst.process.write(data);
+
+    if (cleaned.length > 0) {
       inst.commandHistory.push(cleaned);
       if (inst.commandHistory.length > MAX_HISTORY) {
         inst.commandHistory.shift();
+      }
+    }
+  }
+
+  /** Best-effort shell state tracking for checkpoint restore semantics. */
+  private _trackShellState(inst: PtyInstance, command: string): void {
+    for (const segment of command.split(";")) {
+      const part = segment.trim();
+      const cdMatch = part.match(/^cd(?:\s+(.+))?$/);
+      if (cdMatch) {
+        const rawTarget = cdMatch[1]?.trim() || inst.currentEnv.HOME || process.env.HOME || inst.options.cwd;
+        const target = rawTarget.replace(/^['\"]|['\"]$/g, "");
+        inst.currentCwd = path.resolve(inst.currentCwd, target);
+        continue;
+      }
+
+      const exportMatch = part.match(/^export\s+([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+      if (exportMatch) {
+        const key = exportMatch[1]!;
+        const rawValue = exportMatch[2]!.trim();
+        inst.currentEnv[key] = rawValue.replace(/^['\"]|['\"]$/g, "");
       }
     }
   }

@@ -34,9 +34,14 @@ export interface OutputMark {
   startOffset: number;
 }
 
-let refCounter = 0;
-function nextRef(): string {
-  return `r${++refCounter}`;
+function stableRef(startOffset: number, text: string): string {
+  let hash = 2166136261;
+  const input = `${startOffset}:${text}`;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `r${(hash >>> 0).toString(16)}`;
 }
 
 /**
@@ -82,7 +87,7 @@ export function buildMarks(rawOutput: string): OutputMark[] {
 
     marks.push({
       id: markId++,
-      ref: nextRef(),
+      ref: stableRef(startOff, text),
       type,
       text,
       lines: lineBuf.length,

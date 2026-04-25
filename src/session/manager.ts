@@ -64,6 +64,7 @@ export class SessionManager extends EventEmitter {
     // Don't double-start
     const existing = this.pool.get(session.id);
     if (existing?.running) return;
+    if (existing) this.pool.remove(session.id);
 
     this.pool.spawn(session.id, {
       command: session.command,
@@ -77,7 +78,7 @@ export class SessionManager extends EventEmitter {
   stop(idOrName: string): void {
     const session = this.store.get(idOrName);
     if (!session) throw new Error(`Session ${idOrName} not found`);
-    this.pool.kill(session.id);
+    this.pool.remove(session.id);
   }
 
   /** Send input to a session */
@@ -138,7 +139,7 @@ export class SessionManager extends EventEmitter {
     if (!session) throw new Error(`Session ${idOrName} not found`);
     const pty = this.pool.get(session.id);
     if (!pty) return [];
-    return buildMarks(pty.scrollback.raw());
+    return buildMarks(pty.markSource);
   }
 
   /** Get a specific mark by ID */
@@ -202,13 +203,13 @@ export class SessionManager extends EventEmitter {
     const pty = this.pool.get(session.id);
     return this.store.saveCheckpoint(session.id, name, {
       scrollback: pty?.scrollback.raw() ?? "",
-      env: session.env,
-      cwd: session.directory,
+      env: pty?.currentEnv ?? session.env,
+      cwd: pty?.currentCwd ?? session.directory,
       commandHistory: pty?.commandHistory ?? [],
       scratchpad: session.scratchpad,
       sessionConfig: {
-        name: session.name, command: session.command, directory: session.directory,
-        env: session.env, tags: session.tags,
+        name: session.name, command: session.command, directory: pty?.currentCwd ?? session.directory,
+        env: pty?.currentEnv ?? session.env, tags: session.tags,
       },
     });
   }
@@ -221,10 +222,14 @@ export class SessionManager extends EventEmitter {
     if (!cp || cp.sessionId !== session.id) return false;
 
     // Kill current PTY
-    this.pool.kill(session.id);
+    this.pool.remove(session.id);
 
     // Update session with checkpoint data
-    this.store.update(session.id, { scratchpad: cp.scratchpad });
+    this.store.update(session.id, {
+      scratchpad: cp.scratchpad,
+      directory: cp.cwd ?? session.directory,
+      env: cp.env ?? session.env,
+    });
 
     // Restart and replay scrollback
     this.start(session.id);
@@ -303,11 +308,12 @@ export class SessionManager extends EventEmitter {
     const detector = this._detector(sessionId);
     const raw = pty.scrollback.raw();
     const lastLine = raw.split("\n").filter((l) => l.trim()).pop() ?? "";
-    const recentOutput = raw.slice(-2048);
+    const recentOutput = pty.commandActive && pty.lastCommandOutputStartOffset !== null
+      ? pty.markSource.slice(pty.lastCommandOutputStartOffset)
+      : raw.slice(-2048);
 
     const ctx: CommandContext = {
-      commandPending: pty.lastCommandSentAt !== null &&
-        (pty.lastOutputAt === null || pty.lastOutputAt < pty.lastCommandSentAt),
+      commandPending: pty.commandActive,
       lastCommandText: pty.lastCommandText,
       lastCommandSentAt: pty.lastCommandSentAt,
       lastOutputAt: pty.lastOutputAt,
@@ -316,6 +322,9 @@ export class SessionManager extends EventEmitter {
     };
 
     const result = detector.detect(lastLine, recentOutput, ctx);
+    if (result.state === "ready" || result.state === "error" || result.state === "exited") {
+      pty.commandActive = false;
+    }
     this.emit("state", sessionId, result);
   }
 
@@ -334,7 +343,7 @@ export class SessionManager extends EventEmitter {
       startedAt: pty?.startedAt ?? null,
       restartCount: pty?.restartCount ?? 0,
       stateResult: detector.lastResult,
-      marks: pty ? buildMarks(pty.scrollback.raw()) : [],
+      marks: pty ? buildMarks(pty.markSource) : [],
     };
   }
 }
