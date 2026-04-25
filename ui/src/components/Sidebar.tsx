@@ -111,7 +111,7 @@ export function Sidebar({ sessions, activeSessionId, onSelectSession }: Props) {
       {/* Session list */}
       <div className="flex-1 overflow-y-auto py-2">
         {sessions.length === 0 && (
-          <div className="p-4 text-center opacity-50 text-sm">
+          <div className="p-4 text-center text-sm" style={{ color: "var(--text-muted)" }}>
             No sessions. Click + New to create one.
           </div>
         )}
@@ -140,7 +140,7 @@ export function Sidebar({ sessions, activeSessionId, onSelectSession }: Props) {
                 {s.label ?? s.name}
               </div>
               {s.tags && s.tags.length > 0 && (
-                <div className="text-[0.7rem] opacity-50">{s.tags.join(", ")}</div>
+                <div className="text-[0.7rem]" style={{ color: "var(--text-muted)" }}>{s.tags.join(", ")}</div>
               )}
             </div>
             <button
@@ -154,7 +154,7 @@ export function Sidebar({ sessions, activeSessionId, onSelectSession }: Props) {
       </div>
 
       {/* Footer */}
-      <div className="px-4 py-2 border-t border-[var(--border)] text-[0.7rem] opacity-50 flex justify-between">
+      <div className="px-4 py-2 border-t border-[var(--border)] text-[0.7rem] flex justify-between" style={{ color: "var(--text-muted)" }}>
         <span>ATerm v0.1.0</span>
         <span>{activeCount} active</span>
       </div>

@@ -8,6 +8,7 @@
   --bg-input: #3c3c3c;
   --text: #cccccc;
   --text-bright: #ffffff;
+  --text-muted: #a0a0a0;  /* 4.7:1 contrast against #1e1e1e — meets WCAG AA */
   --border: #333333;
   --accent: #6cb2f7;
   --accent-hover: #5a9de0;

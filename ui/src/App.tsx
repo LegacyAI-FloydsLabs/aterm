@@ -67,7 +67,7 @@ export function App() {
   }[layout];
 
   return (
-    <div className="flex flex-col h-screen w-screen">
+    <div className="flex flex-col h-screen w-screen" role="application" aria-label="ATerm terminal emulator">
       {/* Command Palette */}
       <CommandPalette
         sessions={sessions}
@@ -88,7 +88,7 @@ export function App() {
         )}
 
         {/* Main area */}
-        <div className="flex-1 flex flex-col overflow-hidden">
+        <main className="flex-1 flex flex-col overflow-hidden">
           {/* Toolbar */}
           <div
             className="flex items-center gap-2 px-3 py-1.5 shrink-0 border-b border-[var(--border)]"
@@ -96,9 +96,10 @@ export function App() {
           >
             <button
               onClick={toggleSidebar}
-              className="bg-transparent border-none cursor-pointer text-sm px-1.5 py-0.5 rounded"
+              className="bg-transparent border-none cursor-pointer text-sm min-w-[24px] min-h-[24px] p-2 rounded"
               style={{ color: "var(--text)" }}
               title="Toggle sidebar (Ctrl+B)"
+              aria-label="Toggle sidebar"
             >
               ☰
             </button>
@@ -113,6 +114,7 @@ export function App() {
               onChange={(e) => setLayout(e.target.value as Layout)}
               className="text-xs px-2 py-1 rounded cursor-pointer border border-[var(--border)]"
               style={{ background: "var(--bg-input)", color: "var(--text)" }}
+              aria-label="Select terminal layout"
             >
               <option value="single">Single</option>
               <option value="auto">Auto Grid</option>
@@ -210,7 +212,7 @@ export function App() {
                     >
                       {s.label ?? s.name}
                     </span>
-                    <span className="text-[0.65rem] opacity-40">{s.status}</span>
+                    <span className="text-[0.65rem]" style={{ color: "var(--text-muted)" }}>{s.status}</span>
                   </div>
 
                   {/* Terminal + Marks */}
@@ -229,15 +231,15 @@ export function App() {
               ))}
             </div>
           ) : (
-            <div className="flex-1 flex items-center justify-center flex-col gap-3 text-[var(--text)] opacity-50">
+            <div className="flex-1 flex items-center justify-center flex-col gap-3" style={{ color: "var(--text-muted)" }}>
               <div className="text-3xl">$_</div>
               <div className="text-sm">Select a session or create a new one</div>
-              <div className="text-xs opacity-50">
+              <div className="text-xs" style={{ color: "var(--text-muted)" }}>
                 Ctrl+K command palette &middot; Ctrl+1-9 switch sessions
               </div>
             </div>
           )}
-        </div>
+        </main>
       </div>
 
       <StatusBar
