@@ -38,7 +38,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import type { SessionConfig, Automation } from "./model.js";
+import type { SessionConfig } from "./model.js";
 
 /** Parsed aterm.yml structure */
 export interface AtermConfig {

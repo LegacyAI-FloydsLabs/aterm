@@ -10,7 +10,7 @@ import type { SessionManager, SessionWithState } from "../session/manager.js";
 import type { DistillMode } from "../intel/distill.js";
 import { notifySessionCreated, notifySessionDeleted } from "./ws.js";
 import { setTimeout as delay } from "node:timers/promises";
-import { getBridgeClient, type BridgeCallResult } from "../bridge/anvil-client.js";
+import { getBridgeClient } from "../bridge/anvil-client.js";
 
 type Action =
   | "list" | "read" | "run" | "stop" | "start" | "cancel" | "answer"
@@ -489,18 +489,9 @@ async function handleBatch(c: Context, mgr: SessionManager, body: DoRequest) {
     return c.json({ ok: false, error: "batch limited to 20 actions" }, 400);
   }
 
-  // Execute each action sequentially through the same handler
   const results: any[] = [];
-  const handler = createDoHandler(mgr);
 
   for (const action of actions) {
-    // Create a mock context for each sub-action
-    const subReq = new Request("http://localhost/api/do", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(action),
-    });
-
     // Use a simpler approach: call the manager directly based on action type
     try {
       switch (action.action) {

@@ -206,7 +206,7 @@ export class SessionStore {
   /** Import from TCC agents.json format */
   importTccAgents(agents: Record<string, any>): number {
     let count = 0;
-    for (const [id, agent] of Object.entries(agents)) {
+    for (const [, agent] of Object.entries(agents)) {
       const existing = this.get(agent.name);
       if (existing) continue; // skip duplicates
 

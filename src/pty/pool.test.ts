@@ -47,7 +47,7 @@ describe("PtyPool", () => {
   });
 
   it("provides ANSI-clean scrollback", () => {
-    const raw = inst().scrollback.raw();
+    inst().scrollback.raw(); // verify raw() doesn't throw
     const clean = inst().scrollback.clean();
     // Raw may contain ANSI codes, clean should not
     assert.ok(clean.length > 0);
