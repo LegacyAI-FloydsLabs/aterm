@@ -233,6 +233,29 @@ server.tool(
 
 // ---------------------------------------------------------------------------
 // Start MCP server on stdio
+server.tool(
+  "aterm_bridge",
+  "Control the browser through Open Anvil. Simplified actions: navigate (go to URL), read (get page content), click (click element), type (type text), screenshot (capture page), list_tabs, find (search elements), wait (wait for element). Or pass any of the 47 Anvil tools by name.",
+  {
+    tool: z.string().describe("Tool or action name: navigate, read, click, type, screenshot, list_tabs, find, wait, or any Anvil tool"),
+    args: z.string().optional().describe("JSON string of tool arguments, or a simple value (URL for navigate, selector for click)"),
+  },
+  async ({ tool, args }) => {
+    let parsedArgs: Record<string, any> = {};
+    if (args) {
+      try { parsedArgs = JSON.parse(args); } catch {
+        // Simple value — infer based on tool
+        if (tool === "navigate") parsedArgs = { url: args };
+        else if (tool === "click") parsedArgs = { selector: args };
+        else if (tool === "find") parsedArgs = { query: args };
+        else if (tool === "wait") parsedArgs = { selector: args };
+      }
+    }
+    const data = await apiDo({ action: "bridge", input: tool, directory: JSON.stringify(parsedArgs) });
+    return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+  }
+);
+
 // ---------------------------------------------------------------------------
 async function main() {
   const transport = new StdioServerTransport();

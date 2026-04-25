@@ -10,11 +10,12 @@ import type { SessionManager, SessionWithState } from "../session/manager.js";
 import type { DistillMode } from "../intel/distill.js";
 import { notifySessionCreated, notifySessionDeleted } from "./ws.js";
 import { setTimeout as delay } from "node:timers/promises";
+import { getBridgeClient, type BridgeCallResult } from "../bridge/anvil-client.js";
 
 type Action =
   | "list" | "read" | "run" | "stop" | "start" | "cancel" | "answer"
   | "create" | "delete" | "note" | "search" | "broadcast" | "history"
-  | "checkpoint" | "record" | "verify" | "batch";
+  | "checkpoint" | "record" | "verify" | "batch" | "bridge";
 
 interface DoRequest {
   action: Action;
@@ -44,7 +45,7 @@ interface DoRequest {
 const VALID_ACTIONS = new Set<string>([
   "list", "read", "run", "stop", "start", "cancel", "answer",
   "create", "delete", "note", "search", "broadcast", "history",
-  "checkpoint", "record", "verify", "batch",
+  "checkpoint", "record", "verify", "batch", "bridge",
 ]);
 
 function hint(session: SessionWithState | undefined): string {
@@ -111,6 +112,7 @@ export function createDoHandler(mgr: SessionManager) {
         case "record": return handleRecord(c, mgr, body);
         case "verify": return handleVerify(c, mgr, body);
         case "batch": return handleBatch(c, mgr, body);
+        case "bridge": return handleBridge(c, body);
         default: return c.json({ ok: false, error: "not implemented" }, 501);
       }
     } catch (err: any) {
@@ -547,5 +549,68 @@ async function handleBatch(c: Context, mgr: SessionManager, body: DoRequest) {
     results,
     count: results.length,
     hint: `Executed ${results.length} action(s) in batch.`,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Bridge — Open Anvil browser control with progressive disclosure
+// ---------------------------------------------------------------------------
+
+async function handleBridge(c: Context, body: DoRequest) {
+  // body.input is the tool/action name (e.g. 'navigate', 'read', 'click_element')
+  // body.directory is repurposed as JSON args string for the tool
+  if (!body.input) {
+    // No tool specified — return bridge status and available actions
+    const client = getBridgeClient();
+    const status = client.status;
+    return c.json({
+      ok: true,
+      bridge_status: status,
+      hint: status.server
+        ? "Anvil server running. Specify a tool: navigate, read, click, type, screenshot, or any Anvil tool name."
+        : "Anvil server not running. It will start automatically on the first tool call.",
+      actions_simplified: ["navigate", "read", "click", "type", "screenshot", "list_tabs", "find", "wait"],
+      actions_full: "Use any of the 47 Anvil tools by name (e.g. distill_dom, perceive, set_of_marks)",
+    });
+  }
+
+  // Parse args from body fields
+  const toolName = body.input;
+  let toolArgs: Record<string, any> = {};
+
+  // Args can come from the 'directory' field (JSON string) or from common fields
+  if (body.directory) {
+    try {
+      toolArgs = JSON.parse(body.directory);
+    } catch {
+      // Not JSON — treat as a simple value based on tool
+      if (toolName === "navigate" || toolName === "navigate_to") {
+        toolArgs = { url: body.directory };
+      } else if (toolName === "click" || toolName === "click_element") {
+        toolArgs = { selector: body.directory };
+      } else if (toolName === "find" || toolName === "find_elements") {
+        toolArgs = { query: body.directory };
+      } else if (toolName === "wait" || toolName === "wait_for_element") {
+        toolArgs = { selector: body.directory };
+      }
+    }
+  }
+
+  // Convenience: if session field has a URL and tool is navigate, use it
+  if ((toolName === "navigate" || toolName === "navigate_to") && body.session && body.session.startsWith("http")) {
+    toolArgs.url = toolArgs.url ?? body.session;
+  }
+
+  const client = getBridgeClient();
+  const result = await client.callTool(toolName, toolArgs);
+
+  return c.json({
+    ok: result.ok,
+    result: result.result,
+    error: result.error,
+    hint: result.hint ?? (result.ok ? "Browser tool executed successfully." : "Browser tool failed."),
+    anvil_connected: result.anvil_connected,
+    extension_connected: result.extension_connected,
+    actions: ["navigate", "read", "click", "type", "screenshot", "list_tabs", "find", "wait"],
   });
 }
