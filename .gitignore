@@ -8,3 +8,5 @@ ui/node_modules/
 ui/dist/
 dist/
 test-screenshots/
+*.db-wal
+*.db-shm
