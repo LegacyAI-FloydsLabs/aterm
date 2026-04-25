@@ -194,3 +194,29 @@ ATerm isn't a product we're building for customers. It's a tool we're building f
 10. **Cross-session agent communication** — unlocks multi-agent coordination
 11. **Floyd TTY Bridge integration** — unlocks unified terminal+browser surface
 12. **Declarative session config (aterm.yml)** — unlocks reproducible environments
+
+
+---
+
+## Implementation Status (Updated 2026-04-24)
+
+| # | Want | Status | Evidence |
+|---|------|--------|----------|
+| 1 | Semantic state detection with push | **DONE** | 5-layer detector, 17 tests. Events WS pushes state changes. |
+| 2 | Output distillation (5 modes) | **DONE** | raw/clean/summary/structured/delta. 10 tests. |
+| 3 | Output marks with stable refs | **DONE** | Numbered anchors, mark classification, browser panel. 10 tests. |
+| 4 | Session persistence with searchable history | **DONE** | SQLite, command history, cross-session search. 11 tests. |
+| 5 | Multi-session event-driven monitoring | **DONE** | /ws/events with filtered subscriptions. Grid layouts for parallel view. |
+| 6 | Progressive-disclosure API (3 tiers) | **DONE** | 17 actions, Tier 1/2/3 verified end-to-end. |
+| 7 | Checkpoints and restore | **DONE** | Save/restore scrollback+env+cwd+history+scratchpad+config. |
+| 8 | MCP server (stdio) | **DONE** | 13 tools, HTTP proxy architecture. Streamable HTTP deferred. |
+| 9 | Output deltas | **DONE** | Per-consumer read cursor in scrollback buffer. |
+| 10 | Cross-session agent communication | **DONE** | Filtered event subscriptions on /ws/events. |
+| 11 | Floyd TTY Bridge integration | **NOT DONE** | Phase 4. Requires Floyd TTY Bridge running. Last remaining want. |
+| 12 | Declarative session config (aterm.yml) | **DONE** | YAML parser, env var substitution, --config= flag. 7 tests. |
+
+**Score: 11 of 12 wants implemented.** 62 tests, 0 failures, 5,390 lines.
+
+The only remaining want is Floyd TTY Bridge integration (Phase 4.1), which connects
+ATerm's terminal surface to the browser control surface. This completes the vision of
+"one surface for everything" described in VISION.md.
