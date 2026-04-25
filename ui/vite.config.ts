@@ -8,7 +8,12 @@ export default defineConfig({
     port: 9601,
     proxy: {
       "/api": "http://localhost:9600",
-      "/ws": {
+      "/ws/events": {
+        target: "http://localhost:9600",
+        ws: true,
+        changeOrigin: true,
+      },
+      "/ws/": {
         target: "http://localhost:9600",
         ws: true,
         changeOrigin: true,
