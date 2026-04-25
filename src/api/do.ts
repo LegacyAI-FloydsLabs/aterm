@@ -14,7 +14,7 @@ import { setTimeout as delay } from "node:timers/promises";
 type Action =
   | "list" | "read" | "run" | "stop" | "start" | "cancel" | "answer"
   | "create" | "delete" | "note" | "search" | "broadcast" | "history"
-  | "checkpoint" | "record";
+  | "checkpoint" | "record" | "verify" | "batch";
 
 interface DoRequest {
   action: Action;
@@ -44,7 +44,7 @@ interface DoRequest {
 const VALID_ACTIONS = new Set<string>([
   "list", "read", "run", "stop", "start", "cancel", "answer",
   "create", "delete", "note", "search", "broadcast", "history",
-  "checkpoint", "record",
+  "checkpoint", "record", "verify", "batch",
 ]);
 
 function hint(session: SessionWithState | undefined): string {
@@ -109,6 +109,8 @@ export function createDoHandler(mgr: SessionManager) {
         case "history": return handleHistory(c, mgr, body);
         case "checkpoint": return handleCheckpoint(c, mgr, body);
         case "record": return handleRecord(c, mgr, body);
+        case "verify": return handleVerify(c, mgr, body);
+        case "batch": return handleBatch(c, mgr, body);
         default: return c.json({ ok: false, error: "not implemented" }, 501);
       }
     } catch (err: any) {
@@ -420,4 +422,130 @@ function handleRecord(c: Context, mgr: SessionManager, body: DoRequest) {
   }
 
   return c.json({ ok: false, error: "input must be: start, stop:<id>, list, or get:<id>" }, 400);
+}
+
+// ---------------------------------------------------------------------------
+// Verify & Batch
+// ---------------------------------------------------------------------------
+
+async function handleVerify(c: Context, mgr: SessionManager, body: DoRequest) {
+  if (!body.session) return c.json({ ok: false, error: "session required" }, 400);
+  if (!body.input) return c.json({ ok: false, error: "input (verification command) required" }, 400);
+
+  const session = mgr.get(body.session);
+  if (!session) return c.json({ ok: false, error: `session not found: ${body.session}` }, 404);
+
+  // Auto-start if needed
+  if (session.status === "stopped" || session.status === "exited") {
+    mgr.start(session.id);
+    await delay(1000);
+  }
+
+  // Run the verification command
+  mgr.write(session.id, body.input);
+
+  // Wait for completion
+  const timeoutMs = (body.timeout ?? 60) * 1000;
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    await delay(500);
+    const s = mgr.get(session.id);
+    if (s && (s.status === "ready" || s.status === "error" || s.status === "exited")) break;
+  }
+
+  // Read output and determine pass/fail
+  const output = mgr.read(session.id, "clean", { maxLines: body.lines ?? 100 });
+  const updated = mgr.get(session.id)!;
+
+  // Heuristic: pass if status is ready (command returned to prompt without error)
+  // fail if status is error or output contains error patterns
+  const passed = updated.status === "ready" && updated.stateResult.state !== "error";
+
+  return c.json({
+    ok: true,
+    passed,
+    status: updated.status,
+    output: output.content,
+    state_result: updated.stateResult,
+    hint: passed ? "Verification passed." : "Verification failed.",
+  });
+}
+
+async function handleBatch(c: Context, mgr: SessionManager, body: DoRequest) {
+  // body.input should be a JSON array of action objects
+  if (!body.input) return c.json({ ok: false, error: "input (JSON array of actions) required" }, 400);
+
+  let actions: DoRequest[];
+  try {
+    actions = JSON.parse(body.input);
+    if (!Array.isArray(actions)) throw new Error("not an array");
+  } catch {
+    return c.json({ ok: false, error: "input must be a JSON array of action objects" }, 400);
+  }
+
+  if (actions.length > 20) {
+    return c.json({ ok: false, error: "batch limited to 20 actions" }, 400);
+  }
+
+  // Execute each action sequentially through the same handler
+  const results: any[] = [];
+  const handler = createDoHandler(mgr);
+
+  for (const action of actions) {
+    // Create a mock context for each sub-action
+    const subReq = new Request("http://localhost/api/do", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(action),
+    });
+
+    // Use a simpler approach: call the manager directly based on action type
+    try {
+      switch (action.action) {
+        case "run":
+          if (action.session && action.input) {
+            const s = mgr.get(action.session);
+            if (s) {
+              if (s.status === "stopped" || s.status === "exited") {
+                mgr.start(s.id);
+                await delay(500);
+              }
+              mgr.write(s.id, action.input);
+              await delay(1000);
+              const out = mgr.read(s.id, "clean", { maxLines: 20 });
+              results.push({ ok: true, action: action.action, session: action.session, output: out.content });
+            } else {
+              results.push({ ok: false, action: action.action, error: "session not found" });
+            }
+          }
+          break;
+        case "stop":
+          if (action.session) { mgr.stop(action.session); results.push({ ok: true, action: "stop" }); }
+          break;
+        case "start":
+          if (action.session) { mgr.start(action.session); results.push({ ok: true, action: "start" }); }
+          break;
+        case "cancel":
+          if (action.session) { mgr.cancel(action.session); results.push({ ok: true, action: "cancel" }); }
+          break;
+        case "read":
+          if (action.session) {
+            const out = mgr.read(action.session, (action as any).output_mode ?? "clean", { maxLines: 20 });
+            results.push({ ok: true, action: "read", output: out.content });
+          }
+          break;
+        default:
+          results.push({ ok: false, action: action.action, error: "unsupported in batch" });
+      }
+    } catch (err: any) {
+      results.push({ ok: false, action: action.action, error: err.message });
+    }
+  }
+
+  return c.json({
+    ok: true,
+    results,
+    count: results.length,
+    hint: `Executed ${results.length} action(s) in batch.`,
+  });
 }

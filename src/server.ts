@@ -32,8 +32,27 @@ const PORT = parseInt(process.env.ATERM_PORT || "9600", 10);
 // ---------------------------------------------------------------------------
 // Session Manager
 // ---------------------------------------------------------------------------
+// Session Manager + Config
+// ---------------------------------------------------------------------------
+import { findAndLoadConfig } from "./session/config.js";
+
 const store = new SessionStore();
 const mgr = new SessionManager(store);
+
+// Load aterm.yml if present
+const configPath = process.argv.find((a) => a.startsWith("--config="))?.split("=")[1];
+const config = findAndLoadConfig(configPath);
+if (config) {
+  let loaded = 0;
+  for (const sessionCfg of config.sessions) {
+    const existing = mgr.get(sessionCfg.name);
+    if (!existing) {
+      mgr.create(sessionCfg, sessionCfg.autoStart);
+      loaded++;
+    }
+  }
+  if (loaded > 0) console.log(`Loaded ${loaded} session(s) from aterm.yml`);
+}
 
 // Auto-start sessions from previous run
 const autoStarted = mgr.autoStartAll();

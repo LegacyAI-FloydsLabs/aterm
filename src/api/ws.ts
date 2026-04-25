@@ -32,12 +32,24 @@ interface WsMessage {
 // ---------------------------------------------------------------------------
 const eventClients = new Set<WebSocket>();
 
-function broadcastEvent(event: object): void {
+function broadcastEvent(event: Record<string, any>): void {
   const msg = JSON.stringify(event);
   for (const ws of eventClients) {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(msg);
+    if (ws.readyState !== WebSocket.OPEN) continue;
+
+    const filter = (ws as any)._atermFilter;
+    if (filter?.active()) {
+      if (filter.sessions.size > 0 && event.session) {
+        const sid = event.session.id ?? event.sessionId ?? "";
+        const sname = event.session.name ?? "";
+        if (!filter.sessions.has(sid) && !filter.sessions.has(sname)) continue;
+      }
+      if (filter.types.size > 0 && event.type) {
+        if (!filter.types.has(event.type)) continue;
+      }
     }
+
+    ws.send(msg);
   }
 }
 
@@ -99,22 +111,41 @@ export function createWsServer(mgr: SessionManager, _authToken: string): WebSock
 // /ws/events handler
 // ---------------------------------------------------------------------------
 function handleEventsConnection(ws: WebSocket, mgr: SessionManager): void {
+  const filterSessions = new Set<string>();
+  const filterTypes = new Set<string>();
+  let filterActive = false;
+
   eventClients.add(ws);
 
   // Send initial session list
   const sessions = mgr.list().map((s) => ({
-    id: s.id,
-    name: s.name,
-    label: s.label,
-    status: s.status,
-    tags: s.tags,
-    pid: s.pid,
+    id: s.id, name: s.name, label: s.label, status: s.status, tags: s.tags, pid: s.pid,
   }));
   safeSend(ws, { type: "sessions_list", sessions });
 
-  ws.on("close", () => {
-    eventClients.delete(ws);
+  // Handle filter subscription messages from agents
+  ws.on("message", (raw: Buffer) => {
+    try {
+      const msg = JSON.parse(raw.toString());
+      if (msg.type === "subscribe") {
+        filterActive = true;
+        if (msg.sessions) for (const s of msg.sessions) filterSessions.add(s);
+        if (msg.types) for (const t of msg.types) filterTypes.add(t);
+        safeSend(ws, { type: "subscribed", sessions: [...filterSessions], types: [...filterTypes] });
+      }
+      if (msg.type === "unsubscribe") {
+        filterActive = false;
+        filterSessions.clear();
+        filterTypes.clear();
+        safeSend(ws, { type: "unsubscribed" });
+      }
+    } catch { /* ignore */ }
   });
+
+  ws.on("close", () => { eventClients.delete(ws); });
+
+  // Attach filter metadata for broadcastEvent
+  (ws as any)._atermFilter = { active: () => filterActive, sessions: filterSessions, types: filterTypes };
 }
 
 // ---------------------------------------------------------------------------
