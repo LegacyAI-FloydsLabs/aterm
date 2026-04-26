@@ -15,7 +15,7 @@ import { getBridgeClient } from "../bridge/anvil-client.js";
 type Action =
   | "list" | "read" | "run" | "stop" | "start" | "cancel" | "answer"
   | "create" | "delete" | "note" | "search" | "broadcast" | "history"
-  | "checkpoint" | "record" | "verify" | "batch" | "bridge";
+  | "checkpoint" | "record" | "verify" | "batch" | "bridge" | "automate";
 
 interface DoRequest {
   action: Action;
@@ -40,12 +40,15 @@ interface DoRequest {
 
   // Broadcast-specific
   sessions?: string[];
+
+  // Automate-specific
+  cron_expression?: string;
 }
 
 const VALID_ACTIONS = new Set<string>([
   "list", "read", "run", "stop", "start", "cancel", "answer",
   "create", "delete", "note", "search", "broadcast", "history",
-  "checkpoint", "record", "verify", "batch", "bridge",
+  "checkpoint", "record", "verify", "batch", "bridge", "automate",
 ]);
 
 function hint(session: SessionWithState | undefined): string {
@@ -113,6 +116,7 @@ export function createDoHandler(mgr: SessionManager) {
         case "verify": return handleVerify(c, mgr, body);
         case "batch": return handleBatch(c, mgr, body);
         case "bridge": return handleBridge(c, body);
+        case "automate": return handleAutomate(c, mgr, body);
         default: return c.json({ ok: false, error: "not implemented" }, 501);
       }
     } catch (err: any) {
@@ -178,6 +182,31 @@ function handleRead(c: Context, mgr: SessionManager, body: DoRequest) {
   });
 }
 
+/** Event-driven wait for session to reach a terminal state. Replaces polling loops. */
+function waitForState(
+  mgr: SessionManager,
+  sessionId: string,
+  terminalStates: string[],
+  timeoutMs: number,
+): Promise<void> {
+  return new Promise((resolve) => {
+    const s = mgr.get(sessionId);
+    if (s && terminalStates.includes(s.status)) { resolve(); return; }
+
+    const timer = setTimeout(() => { mgr.off("state", handler); resolve(); }, timeoutMs);
+
+    const handler = (id: string, result: any) => {
+      if (id !== sessionId) return;
+      if (terminalStates.includes(result.state)) {
+        clearTimeout(timer);
+        mgr.off("state", handler);
+        resolve();
+      }
+    };
+    mgr.on("state", handler);
+  });
+}
+
 async function handleRun(c: Context, mgr: SessionManager, body: DoRequest) {
   if (!body.session) return c.json({ ok: false, error: "session required" }, 400);
   if (!body.input) return c.json({ ok: false, error: "input required" }, 400);
@@ -214,15 +243,8 @@ async function handleRun(c: Context, mgr: SessionManager, body: DoRequest) {
       }
     }
   } else {
-    // No wait pattern — just wait for prompt or timeout
-    const quickTimeout = Math.min(timeoutMs, 10_000);
-    while (Date.now() - startTime < quickTimeout) {
-      await delay(300);
-      const s = mgr.get(session.id);
-      if (s && (s.status === "ready" || s.status === "error" || s.status === "exited")) {
-        break;
-      }
-    }
+    // No wait pattern — event-driven wait for terminal state
+    await waitForState(mgr, session.id, ["ready", "error", "exited"], Math.min(timeoutMs, 10_000));
   }
 
   // Read result
@@ -326,8 +348,8 @@ function handleSearch(c: Context, mgr: SessionManager, body: DoRequest) {
       if (lines.length > 0) {
         results.push({ session: session.name, matches: lines.slice(0, 10) });
       }
-    } catch {
-      // Skip sessions without PTY
+    } catch (err) {
+      console.error("[aterm] search read failed for session:", session.id, err);
     }
   }
 
@@ -347,8 +369,8 @@ function handleBroadcast(c: Context, mgr: SessionManager, body: DoRequest) {
     try {
       mgr.write(name, body.input);
       sent++;
-    } catch {
-      // Skip failed
+    } catch (err) {
+      console.error("[aterm] broadcast write failed for:", name, err);
     }
   }
 
@@ -447,13 +469,8 @@ async function handleVerify(c: Context, mgr: SessionManager, body: DoRequest) {
   mgr.write(session.id, body.input);
 
   // Wait for completion
-  const timeoutMs = (body.timeout ?? 60) * 1000;
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    await delay(500);
-    const s = mgr.get(session.id);
-    if (s && (s.status === "ready" || s.status === "error" || s.status === "exited")) break;
-  }
+  // Wait for completion — event-driven
+  await waitForState(mgr, session.id, ["ready", "error", "exited"], (body.timeout ?? 60) * 1000);
 
   // Read output and determine pass/fail
   const output = mgr.read(session.id, "clean", { maxLines: body.lines ?? 100 });
@@ -540,6 +557,55 @@ async function handleBatch(c: Context, mgr: SessionManager, body: DoRequest) {
     results,
     count: results.length,
     hint: `Executed ${results.length} action(s) in batch.`,
+  });
+}
+
+
+// ---------------------------------------------------------------------------
+// Automate — cron scheduling for sessions
+// ---------------------------------------------------------------------------
+
+function handleAutomate(c: Context, mgr: SessionManager, body: DoRequest) {
+  if (!body.session) return c.json({ ok: false, error: "session required" }, 400);
+
+  // input determines the sub-action: register, cancel, or list
+  const subAction = (body.input ?? "list") as "register" | "cancel" | "list";
+
+  if (subAction === "register") {
+    if (!body.cron_expression) {
+      return c.json({ ok: false, error: "cron_expression required for register" }, 400);
+    }
+    const result = mgr.automate(body.session, "register", body.cron_expression);
+    if (!result.ok) {
+      return c.json({
+        ok: false,
+        error: result.error,
+        hint: result.error,
+      }, 400);
+    }
+    return c.json({
+      ok: true,
+      next_fire: result.nextFire?.toISOString(),
+      hint: `Cron registered: ${body.cron_expression}`,
+    });
+  }
+
+  if (subAction === "cancel") {
+    const result = mgr.automate(body.session, "cancel");
+    return c.json({ ok: result.ok, hint: "Cron cancelled." });
+  }
+
+  // list
+  const result = mgr.automate(body.session, "list");
+  return c.json({
+    ok: true,
+    jobs: result.jobs?.map((j) => ({
+      session_id: j.sessionId,
+      expression: j.expression,
+      next_fire: j.nextFire?.toISOString(),
+      last_run: j.lastRun?.toISOString(),
+    })),
+    hint: `${result.jobs?.length ?? 0} cron job(s).`,
   });
 }
 

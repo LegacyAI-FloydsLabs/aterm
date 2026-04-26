@@ -11,6 +11,7 @@ import { PtyPool, type PtyInstance } from "../pty/pool.js";
 import { StateDetector, type StateResult, type CommandContext } from "../intel/state.js";
 import { distill, type DistillMode, type DistilledOutput } from "../intel/distill.js";
 import { buildMarks, getMark, type OutputMark } from "../intel/marks.js";
+import { AutomationRunner } from "./automation.js";
 import { SessionStore } from "./store.js";
 import type { Session, SessionConfig, SessionStatus } from "./model.js";
 
@@ -23,11 +24,13 @@ export class SessionManager extends EventEmitter {
   private store: SessionStore;
   private pool: PtyPool;
   private detectors = new Map<string, StateDetector>();
+  private automation: AutomationRunner;
 
   constructor(store: SessionStore) {
     super();
     this.store = store;
     this.pool = new PtyPool();
+    this.automation = new AutomationRunner((sessionId) => this._onCronFire(sessionId));
 
     // Wire PTY events to state detection
     this.pool.on("data", (id: string, _data: string) => {
@@ -52,6 +55,15 @@ export class SessionManager extends EventEmitter {
     const session = this.store.create(config);
     if (start || config.autoStart) {
       this.start(session.id);
+    }
+    // Register cron automation if configured
+    if (session.automation.type === "cron" && session.automation.cronExpression) {
+      const result = this.automation.register(session.id, session.automation.cronExpression);
+      if (result.ok) {
+        console.log(`Cron registered for ${session.name}: ${session.automation.cronExpression} (next: ${result.nextFire?.toISOString()})`);
+      } else {
+        console.error(`Cron registration failed for ${session.name}: ${result.error}`);
+      }
     }
     return this._enrichSession(session);
   }
@@ -103,12 +115,13 @@ export class SessionManager extends EventEmitter {
     if (pty?.process) pty.process.write("\x03");
   }
 
-  /** Delete a session (stop + remove from store) */
+  /** Delete a session (stop + remove from store + cancel cron) */
   delete(idOrName: string): boolean {
     const session = this.store.get(idOrName);
     if (!session) return false;
     this.pool.remove(session.id);
     this.detectors.delete(session.id);
+    this.automation.cancel(session.id);
     return this.store.delete(session.id);
   }
 
@@ -284,9 +297,63 @@ export class SessionManager extends EventEmitter {
 
   /** Clean shutdown */
   destroy(): void {
+    this.automation.destroy();
     this.pool.destroyAll();
     this.store.close();
   }
+  /** Manage cron automation for a session */
+  automate(idOrName: string, action: "register" | "cancel" | "list", cronExpression?: string): {
+    ok: boolean; error?: string; nextFire?: Date; jobs?: ReturnType<AutomationRunner["list"]>;
+  } {
+    const session = this.store.get(idOrName);
+    if (!session) return { ok: false, error: `Session ${idOrName} not found` };
+
+    if (action === "cancel") {
+      this.automation.cancel(session.id);
+      return { ok: true };
+    }
+
+    if (action === "list") {
+      return { ok: true, jobs: this.automation.list() };
+    }
+
+    if (action === "register") {
+      if (!cronExpression) return { ok: false, error: "cronExpression required for register" };
+      const result = this.automation.register(session.id, cronExpression);
+      if (result.ok) {
+        // Persist the automation config on the session
+        this.store.update(session.id, {
+          automation: { type: "cron", cronExpression },
+        });
+      }
+      return result;
+    }
+
+    return { ok: false, error: `Unknown automate action: ${action}` };
+  }
+
+  // -----------------------------------------------------------------------
+  // Private
+  // -----------------------------------------------------------------------
+
+  private _onCronFire(sessionId: string): void {
+    const session = this.store.get(sessionId);
+    if (!session) {
+      this.automation.cancel(sessionId);
+      return;
+    }
+
+    // Re-run the session's command
+    // If the session is running, write the command; if not, start it
+    const pty = this.pool.get(sessionId);
+    if (pty?.running) {
+      this.write(sessionId, session.command);
+    } else {
+      this.start(sessionId);
+    }
+    this.emit("cron", sessionId, session.name);
+  }
+
 
   // -----------------------------------------------------------------------
   // Private

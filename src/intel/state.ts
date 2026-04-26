@@ -25,6 +25,7 @@ import {
   PROGRESS_PATTERNS,
   type Pattern,
 } from "./patterns.js";
+import { stripAnsi } from "./ansi.js";
 
 export type SessionState =
   | "stopped"
@@ -67,11 +68,6 @@ export interface CommandContext {
   exitCode: number | null;
 }
 
-const ANSI_RE = /(?:\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][A-Za-z0-9]|\x1b[^[(\]0-9]|\x0d)/g;
-
-function stripAnsi(s: string): string {
-  return s.replace(ANSI_RE, "");
-}
 
 function matchFirst(text: string, patterns: Pattern[]): Pattern | null {
   for (const p of patterns) {

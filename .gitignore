@@ -33,3 +33,10 @@ test-screenshots/
 
 # Agent scratch
 .floyd/scratch/
+.floyd/agent_log.jsonl
+.floyd/crystallized-concepts-*.md
+.floyd/session-memory-*.md
+.floyd/.supercache_version
+
+# Agent research/docs (session artifacts, not project source)
+Floyd Docs/

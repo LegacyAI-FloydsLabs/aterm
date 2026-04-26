@@ -53,6 +53,38 @@ function broadcastEvent(event: Record<string, any>): void {
   }
 }
 
+// State event throttle — max 10/sec per session, ensures last event always delivers
+const STATE_THROTTLE_MS = 100;
+const stateThrottles = new Map<string, {
+  lastSent: number;
+  timer: ReturnType<typeof setTimeout> | null;
+  pending: Record<string, any> | null;
+}>();
+
+function throttledStateBroadcast(sessionId: string, event: Record<string, any>): void {
+  const now = Date.now();
+  const entry = stateThrottles.get(sessionId);
+
+  if (!entry || now - entry.lastSent >= STATE_THROTTLE_MS) {
+    if (entry?.timer) clearTimeout(entry.timer);
+    stateThrottles.set(sessionId, { lastSent: now, timer: null, pending: null });
+    broadcastEvent(event);
+  } else {
+    entry.pending = event;
+    if (!entry.timer) {
+      entry.timer = setTimeout(() => {
+        const e = stateThrottles.get(sessionId);
+        if (e?.pending) {
+          broadcastEvent(e.pending);
+          e.lastSent = Date.now();
+          e.pending = null;
+        }
+        if (e) e.timer = null;
+      }, STATE_THROTTLE_MS - (now - entry.lastSent));
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Terminal WS Server
 // ---------------------------------------------------------------------------
@@ -78,7 +110,7 @@ export function createWsServer(mgr: SessionManager, _authToken: string): WebSock
 
   mgr.on("state", (id: string, result: any) => {
     const s = mgr.get(id);
-    broadcastEvent({
+    throttledStateBroadcast(id, {
       type: "session_state",
       session: { id, name: s?.name, status: result.state, stateResult: result },
     });

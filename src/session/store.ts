@@ -10,7 +10,7 @@ import type { Session, SessionConfig } from "./model.js";
 import { SESSION_DEFAULTS } from "./model.js";
 import { v4 as uuid } from "uuid";
 
-const DB_PATH = path.join(process.cwd(), "aterm.db");
+const DB_PATH = process.env.ATERM_DB ?? path.join(process.cwd(), "aterm.db");
 
 export class SessionStore {
   private db: Database.Database;

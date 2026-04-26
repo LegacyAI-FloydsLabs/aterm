@@ -258,8 +258,37 @@ server.tool(
 
 // ---------------------------------------------------------------------------
 async function main() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  const transportType = process.env.ATERM_MCP_TRANSPORT ?? "stdio";
+
+  if (transportType === "http") {
+    const { StreamableHTTPServerTransport } = await import("@modelcontextprotocol/sdk/server/streamableHttp.js");
+    const { createServer } = await import("node:http");
+    const { randomUUID } = await import("node:crypto");
+
+    const port = parseInt(process.env.ATERM_MCP_PORT ?? "9601", 10);
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+    });
+
+    const httpServer = createServer(async (req, res) => {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept");
+      if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return; }
+
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(chunk as Buffer);
+      const body = Buffer.concat(chunks).toString();
+      await transport.handleRequest(req, res, body ? JSON.parse(body) : undefined);
+    });
+
+    await server.connect(transport);
+    httpServer.listen(port);
+    console.error(`ATerm MCP server (Streamable HTTP) on port ${port}`);
+  } else {
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+  }
 }
 
 main().catch((err) => {

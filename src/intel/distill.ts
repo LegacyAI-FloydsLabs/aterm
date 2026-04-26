@@ -13,8 +13,7 @@
  */
 
 import { Scrollback } from "../pty/scrollback.js";
-
-const ANSI_RE = /(?:\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][A-Za-z0-9]|\x1b[^[(\]0-9]|\x0d)/g;
+import { stripAnsi } from "./ansi.js";
 
 export type DistillMode = "raw" | "clean" | "summary" | "structured" | "delta";
 
@@ -80,9 +79,6 @@ const ERROR_INDICATORS: RegExp[] = [
 // Distillation functions
 // ---------------------------------------------------------------------------
 
-function stripAnsi(s: string): string {
-  return s.replace(ANSI_RE, "");
-}
 
 function isNoise(line: string): boolean {
   return NOISE_PATTERNS.some((p) => p.test(line));

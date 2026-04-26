@@ -38,7 +38,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import type { SessionConfig } from "./model.js";
+import type { SessionConfig, AutomationType } from "./model.js";
 
 /** Parsed aterm.yml structure */
 export interface AtermConfig {
@@ -162,6 +162,22 @@ function parseKV(kv: string, target: Record<string, any>): void {
     case "pinned": target.pinned = val === "true"; break;
     case "auto_start": target.autoStart = val === "true"; break;
     case "auto_restart": target.autoRestart = val === "true"; break;
+    case "automation": {
+      // Parse automation: {type: cron, cronExpression: "*/1 * * * *"}
+      // Handles relaxed YAML inline syntax (unquoted keys, optionally quoted values)
+      if (val.startsWith("{")) {
+        const auto = parseRelaxedInlineObject(val);
+        if (auto) {
+          target.automation = {
+            type: (auto.type ?? "none") as AutomationType,
+            interval: auto.interval ? Number(auto.interval) : undefined,
+            watchPath: auto.watchPath ?? auto.watch_path,
+            cronExpression: auto.cronExpression ?? auto.cron_expression,
+          };
+        }
+      }
+      break;
+    }
     case "tags":
       // Support both [a, b] and block list
       if (val.startsWith("[")) {
@@ -193,6 +209,7 @@ function buildSessionConfig(partial: Partial<SessionConfig>): SessionConfig {
     pinned: partial.pinned,
     autoStart: partial.autoStart,
     autoRestart: partial.autoRestart,
+    automation: partial.automation,
   };
 }
 
@@ -202,4 +219,48 @@ function buildSessionConfig(partial: Partial<SessionConfig>): SessionConfig {
 export function loadTccAgentsJson(filePath: string): Record<string, any> {
   const raw = fs.readFileSync(filePath, "utf-8");
   return JSON.parse(raw);
+}
+
+
+/**
+ * Parse a relaxed inline YAML object like {type: cron, cronExpression: "\u002A/1 * * * *"}
+ * Handles unquoted keys and optionally quoted values.
+ * Returns null if parsing fails.
+ */
+function parseRelaxedInlineObject(val: string): Record<string, string> | null {
+  const inner = val.replace(/^\{/, "").replace(/\}$/, "").trim();
+  if (!inner) return {};
+
+  const result: Record<string, string> = {};
+  // Split by comma — but respect quoted strings
+  const pairs: string[] = [];
+  let current = "";
+  let inQuote = false;
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i]!;
+    if (ch === '"' && (i === 0 || inner[i - 1] !== '\\')) {
+      inQuote = !inQuote;
+      current += ch;
+    } else if (ch === ',' && !inQuote) {
+      pairs.push(current.trim());
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  if (current.trim()) pairs.push(current.trim());
+
+  for (const pair of pairs) {
+    const colonIdx = pair.indexOf(':');
+    if (colonIdx === -1) continue;
+    const key = pair.slice(0, colonIdx).trim();
+    let value = pair.slice(colonIdx + 1).trim();
+    // Strip surrounding quotes
+    if (value.startsWith('"') && value.endsWith('"')) {
+      value = value.slice(1, -1);
+    }
+    result[key] = value;
+  }
+
+  return Object.keys(result).length > 0 ? result : null;
 }

@@ -150,3 +150,49 @@ export const PROGRESS_PATTERNS: Pattern[] = [
   { re: /ETA\s/i, label: "eta" },
   { re: /\d+\/\d+\s+(tests?|specs?|suites?)/i, label: "test-progress" },
 ];
+
+
+// ---------------------------------------------------------------------------
+// Pattern Registry — runtime extensibility for pattern banks
+// ---------------------------------------------------------------------------
+
+export type PatternBank = "prompt" | "input" | "error" | "progress";
+
+export class PatternRegistry {
+  /** Get all patterns for a bank */
+  get(bank: PatternBank): Pattern[] {
+    switch (bank) {
+      case "prompt": return PROMPT_PATTERNS;
+      case "input": return INPUT_PATTERNS;
+      case "error": return ERROR_PATTERNS;
+      case "progress": return PROGRESS_PATTERNS;
+    }
+  }
+
+  /** Add a pattern to a bank */
+  add(bank: PatternBank, pattern: Pattern): void {
+    this.get(bank).push(pattern);
+  }
+
+  /** Remove a pattern by label */
+  remove(bank: PatternBank, label: string): boolean {
+    const arr = this.get(bank);
+    const idx = arr.findIndex((p) => p.label === label);
+    if (idx === -1) return false;
+    arr.splice(idx, 1);
+    return true;
+  }
+
+  /** List all banks with pattern counts */
+  list(): Record<PatternBank, number> {
+    return {
+      prompt: PROMPT_PATTERNS.length,
+      input: INPUT_PATTERNS.length,
+      error: ERROR_PATTERNS.length,
+      progress: PROGRESS_PATTERNS.length,
+    };
+  }
+}
+
+/** Singleton registry — add/remove patterns at runtime */
+export const patternRegistry = new PatternRegistry();

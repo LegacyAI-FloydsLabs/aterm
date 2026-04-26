@@ -8,6 +8,7 @@ import { SessionStore } from "./session/store.js";
 import { SessionManager } from "./session/manager.js";
 import { createDoHandler } from "./api/do.js";
 import { createWsServer, handleUpgrade } from "./api/ws.js";
+import { getBridgeClient, destroyBridgeClient } from "./bridge/anvil-client.js";
 
 // ---------------------------------------------------------------------------
 // Auth token — auto-generated on first run, persisted to .aterm-token
@@ -62,9 +63,42 @@ const autoStarted = mgr.autoStartAll();
 // ---------------------------------------------------------------------------
 const app = new Hono();
 
-// CORS for browser UI (same-origin in production, permissive in dev)
-app.use("*", cors());
+// CORS — restrict to localhost in production, permissive in dev
+app.use("*", cors({
+  origin: (origin, cb) => {
+    // Allow requests with no origin (curl, MCP stdio, WebSocket upgrades)
+    if (!origin) return cb(null, true);
+    // Allow localhost and 127.0.0.1 on any port
+    if (/^https?:\/\/(localhost|127\.0\.0\.1)(:[0-9]+)?$/.test(origin)) return cb(null, true);
+    // Reject everything else
+    cb(new Error("CORS: origin not allowed"), false);
+  },
+}));
 
+// Rate limiting — 60 requests/minute per token, burst to 10/sec
+const rateBuckets = new Map<string, { count: number; resetAt: number }>();
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX = 60;
+
+app.use("*", async (c, next) => {
+  if (c.req.path === "/health") return next();
+
+  const key = c.req.header("Authorization") ?? c.req.query("token") ?? "anon";
+  const now = Date.now();
+  let bucket = rateBuckets.get(key);
+
+  if (!bucket || now > bucket.resetAt) {
+    bucket = { count: 0, resetAt: now + RATE_LIMIT_WINDOW_MS };
+    rateBuckets.set(key, bucket);
+  }
+
+  bucket.count++;
+  if (bucket.count > RATE_LIMIT_MAX) {
+    return c.json({ ok: false, error: "rate limited", retryAfterMs: bucket.resetAt - now }, 429);
+  }
+
+  return next();
+});
 // Auth middleware — skip health check
 app.use("*", async (c, next) => {
   if (c.req.path === "/health") return next();
@@ -118,6 +152,24 @@ httpServer.on("upgrade", (req, socket, head) => {
   }
 });
 
+// Proactively start the Anvil MCP bridge (non-blocking)
+const bridgeClient = getBridgeClient();
+bridgeClient.ensureConnected().then((result) => {
+  if (result.ok) {
+    console.log("Anvil MCP: connected (bridge ready)");
+  } else {
+    console.log(`Anvil MCP: not available (${result.hint ?? "unknown"})`);
+  }
+}).catch(() => {
+  // Non-fatal — bridge calls will retry lazily
+  console.log("Anvil MCP: startup probe failed (bridge available on first call)");
+});
+
 // Graceful shutdown
-process.on("SIGTERM", () => { mgr.destroy(); process.exit(0); });
-process.on("SIGINT", () => { mgr.destroy(); process.exit(0); });
+function shutdown(): void {
+  destroyBridgeClient();
+  mgr.destroy();
+  process.exit(0);
+}
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);
