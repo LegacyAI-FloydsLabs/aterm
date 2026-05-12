@@ -17,6 +17,7 @@
   --yellow: #dcdcaa;
   --orange: #d7a74e;
   --sidebar-width: 280px;
+}
 
 :root[data-theme="light"] {
   --bg: #ffffff;

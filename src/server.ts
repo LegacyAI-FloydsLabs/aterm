@@ -65,13 +65,13 @@ const app = new Hono();
 
 // CORS — restrict to localhost in production, permissive in dev
 app.use("*", cors({
-  origin: (origin, cb) => {
+  origin: (origin) => {
     // Allow requests with no origin (curl, MCP stdio, WebSocket upgrades)
-    if (!origin) return cb(null, true);
+    if (!origin) return "*";
     // Allow localhost and 127.0.0.1 on any port
-    if (/^https?:\/\/(localhost|127\.0\.0\.1)(:[0-9]+)?$/.test(origin)) return cb(null, true);
+    if (/^https?:\/\/(localhost|127\.0\.0\.1)(:[0-9]+)?$/.test(origin)) return origin;
     // Reject everything else
-    cb(new Error("CORS: origin not allowed"), false);
+    return "";
   },
 }));
 
