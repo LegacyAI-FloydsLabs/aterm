@@ -267,5 +267,38 @@ describe("Output Distillation", () => {
       assert.ok(!d.content.includes("\x1b["), "delta should strip ANSI");
       assert.ok(d.content.includes("red"));
     });
+
+  it("panic trigger forces raw mode when confidence is low", () => {
+    const sb = makeScrollback("some output with errors and warnings\n");
+    sb.lastConfidence = 0.2; // below PANIC_THRESHOLD of 0.4
+    const d = distill(sb, "structured");
+    assert.equal(d.mode, "raw", "panic should force raw mode");
+    assert.ok(d.downgradeReason?.includes("panic"), "should have panic reason");
+    assert.ok(d.downgradeReason?.includes("0.20"), "should include confidence value");
+  });
+
+  it("verbose trigger downgrades structured to summary", () => {
+    const sb = makeScrollback("some output\n");
+    sb.lastConfidence = 0.5; // below VERBOSE_THRESHOLD of 0.7, above PANIC
+    const d = distill(sb, "structured");
+    assert.equal(d.mode, "summary", "verbose should downgrade structured→summary");
+    assert.ok(d.downgradeReason?.includes("verbose"), "should have verbose reason");
+    assert.ok(d.downgradeReason?.includes("0.50"), "should include confidence value");
+  });
+
+  it("verbose trigger downgrades summary to clean", () => {
+    const sb = makeScrollback("some output\n");
+    sb.lastConfidence = 0.6; // below VERBOSE_THRESHOLD of 0.7
+    const d = distill(sb, "summary");
+    assert.equal(d.mode, "clean", "verbose should downgrade summary→clean");
+  });
+
+  it("high confidence does not trigger downgrade", () => {
+    const sb = makeScrollback("some output\n");
+    sb.lastConfidence = 0.85; // above both thresholds
+    const d = distill(sb, "structured");
+    assert.equal(d.mode, "structured", "high confidence should keep requested mode");
+    assert.equal(d.downgradeReason, undefined, "no downgrade reason expected");
+  });
   });
 });

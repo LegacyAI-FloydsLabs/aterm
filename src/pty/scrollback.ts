@@ -16,6 +16,8 @@ export class Scrollback {
 
   /** Per-consumer read cursors — maps consumerId to byte offset they've read up to */
   private cursors = new Map<string, number>();
+  /** State-detector confidence from last assessment (0-1). Used by distill panic/verbose triggers. */
+  lastConfidence: number = 1.0;
 
   constructor(maxBytes = 256 * 1024) {
     this.maxBytes = maxBytes;

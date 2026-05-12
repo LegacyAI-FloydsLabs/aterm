@@ -32,6 +32,8 @@ export interface DistilledOutput {
   originalBytes: number;
   distilledBytes: number;
   reductionPct: number;
+  /** If mode was auto-downgraded by panic/verbose trigger, the reason */
+  downgradeReason?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -45,6 +47,9 @@ export interface DistilledOutput {
 // ---------------------------------------------------------------------------
 
 function collapseCarriageReturns(raw: string): string {
+  // Fast-path: no carriage returns → return unchanged
+  if (raw.indexOf("\r") === -1) return raw;
+
   // Step 1: Normalize \r\n → \n (CRLF is standard line ending, not overwrite)
   const normalized = raw.replace(/\r\n/g, "\n");
 
@@ -141,6 +146,12 @@ const NOISE_PATTERNS: RegExp[] = [
   /^[\s]*$/,
 ];
 
+// Combined noise regex — single alternation for O(1) fast-reject
+// Built at module init from all NOISE_PATTERNS sources
+const NOISE_COMBINED_RE = new RegExp(
+  NOISE_PATTERNS.map((p) => `(?:${p.source})`).join("|"),
+);
+
 // ---------------------------------------------------------------------------
 // Error indicators — lines that are ALWAYS signal (override noise)
 // ---------------------------------------------------------------------------
@@ -194,7 +205,7 @@ const RESULT_INDICATORS: RegExp[] = [
 // ---------------------------------------------------------------------------
 
 function isNoise(line: string): boolean {
-  return NOISE_PATTERNS.some((p) => p.test(line));
+  return NOISE_COMBINED_RE.test(line);
 }
 
 function isSignal(line: string): boolean {
@@ -382,6 +393,16 @@ function distillStructured(raw: string): StructuredResult {
 }
 
 // ---------------------------------------------------------------------------
+// Panic/Verbose thresholds — auto-downgrade distillation when state
+// detection confidence is low, ensuring agents never miss critical data
+// ---------------------------------------------------------------------------
+
+/** Confidence below which distillation is forced to raw mode */
+const PANIC_THRESHOLD = 0.4;
+/** Confidence below which distillation is downgraded one level */
+const VERBOSE_THRESHOLD = 0.7;
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -398,10 +419,28 @@ export function distill(
     : scrollback.raw();
 
   const originalBytes = raw.length;
+
+  // Panic/Verbose: auto-downgrade mode based on state detection confidence
+  const confidence = scrollback.lastConfidence;
+  let effectiveMode: DistillMode = mode;
+  let downgradeReason: string | undefined;
+
+  if (mode !== "raw" && mode !== "delta") {
+    if (confidence < PANIC_THRESHOLD) {
+      effectiveMode = "raw";
+      downgradeReason = `panic: confidence ${confidence.toFixed(2)} < ${PANIC_THRESHOLD}`;
+    } else if (confidence < VERBOSE_THRESHOLD && mode === "structured") {
+      effectiveMode = "summary";
+      downgradeReason = `verbose: confidence ${confidence.toFixed(2)} < ${VERBOSE_THRESHOLD} (structured→summary)`;
+    } else if (confidence < VERBOSE_THRESHOLD && mode === "summary") {
+      effectiveMode = "clean";
+      downgradeReason = `verbose: confidence ${confidence.toFixed(2)} < ${VERBOSE_THRESHOLD} (summary→clean)`;
+    }
+  }
   let content: string;
   let segments: StructuredSegment[] | undefined;
 
-  switch (mode) {
+  switch (effectiveMode) {
     case "raw":
       content = raw;
       break;
@@ -430,11 +469,12 @@ export function distill(
     : 0;
 
   return {
-    mode,
+    mode: effectiveMode,
     content,
     segments,
     originalBytes,
     distilledBytes,
     reductionPct,
+    downgradeReason,
   };
 }

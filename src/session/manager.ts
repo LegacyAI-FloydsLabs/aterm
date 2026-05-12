@@ -389,6 +389,7 @@ export class SessionManager extends EventEmitter {
     };
 
     const result = detector.detect(lastLine, recentOutput, ctx);
+    pty.scrollback.lastConfidence = result.confidence;
     if (result.state === "ready" || result.state === "error" || result.state === "exited") {
       pty.commandActive = false;
     }
