@@ -441,6 +441,63 @@ select {
   }
 }
 
+/* ─────────────────────────────────────────────
+   Base UI Dialog — data-state driven transitions
+   Avoids AnimatePresence/Portal mismount fighting.
+   ───────────────────────────────────────────── */
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  opacity: 0;
+  transition: opacity 240ms var(--easing);
+}
+.dialog-backdrop[data-state="open"] {
+  opacity: 1;
+}
+.dialog-backdrop[data-starting-style] {
+  opacity: 0;
+}
+
+.dialog-popup {
+  position: fixed;
+  z-index: 110;
+  opacity: 0;
+  transition: opacity 320ms var(--easing), transform 320ms var(--easing);
+  will-change: opacity, transform;
+}
+.dialog-popup[data-state="open"] {
+  opacity: 1;
+  transform: none;
+}
+/* palette — drops in from above center */
+.dialog-popup-palette {
+  left: 50%;
+  top: 15vh;
+  width: 560px;
+  max-width: calc(100vw - 32px);
+  max-height: 60vh;
+  transform: translate(-50%, -8px) scale(0.98);
+}
+.dialog-popup-palette[data-state="open"] {
+  transform: translateX(-50%);
+}
+/* settings — slides in from the right edge */
+.dialog-popup-settings {
+  right: 16px;
+  top: 16px;
+  bottom: 16px;
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  transform: translateX(24px);
+}
+.dialog-popup-settings[data-state="open"] {
+  transform: none;
+}
+
 /* Reduced motion */
 @media (prefers-reduced-motion: reduce) {
   *,

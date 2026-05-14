@@ -4,7 +4,7 @@
  * Quiet by default. The terminal is the centerpiece — surrounded by black,
  * with a thin glass frame and a sparse toolbar above it.
  */
-import { AnimatePresence, motion } from "motion/react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { tv } from "tailwind-variants";
 import { useMemo } from "react";
 import { Terminal } from "./Terminal";
@@ -256,25 +256,36 @@ function TabsBar({
   );
 }
 
-function EmptyState({ density, activeModel }: { density: "zen" | "calm" | "full"; activeModel: string }) {
+function EmptyState({
+  density,
+  activeModel,
+}: {
+  density: "zen" | "calm" | "full";
+  activeModel: string;
+}) {
+  const reduced = useReducedMotion();
   return (
     <motion.div
       key="empty"
-      initial={{ opacity: 0, y: 6 }}
+      initial={reduced ? false : { opacity: 0, y: 6 }}
       animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -6 }}
-      transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
+      exit={reduced ? { opacity: 0 } : { opacity: 0, y: -6 }}
+      transition={{ duration: reduced ? 0.001 : 0.5, ease: [0.16, 1, 0.3, 1] }}
       className="flex-1 grid place-items-center select-none"
     >
       <div className="flex flex-col items-center gap-6">
         <motion.div
-          initial={{ opacity: 0, scale: 0.94, rotate: 0 }}
-          animate={{ opacity: 1, scale: 1, rotate: 360 }}
-          transition={{
-            opacity: { duration: 0.5, ease: [0.16, 1, 0.3, 1] },
-            scale: { duration: 0.5, ease: [0.16, 1, 0.3, 1] },
-            rotate: { duration: 80, repeat: Infinity, ease: "linear" },
-          }}
+          initial={reduced ? false : { opacity: 0, scale: 0.94, rotate: 0 }}
+          animate={reduced ? { opacity: 1 } : { opacity: 1, scale: 1, rotate: 360 }}
+          transition={
+            reduced
+              ? { duration: 0.001 }
+              : {
+                  opacity: { duration: 0.5, ease: [0.16, 1, 0.3, 1] },
+                  scale: { duration: 0.5, ease: [0.16, 1, 0.3, 1] },
+                  rotate: { duration: 80, repeat: Infinity, ease: "linear" },
+                }
+          }
           className="diamond-mark diamond-mark-active"
           aria-hidden="true"
         />

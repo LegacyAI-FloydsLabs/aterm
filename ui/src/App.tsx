@@ -11,6 +11,7 @@
  * palette + settings open state, density, model, timeline events.
  */
 import { useState, useCallback, useEffect, useSyncExternalStore } from "react";
+import { MotionConfig } from "motion/react";
 import { useEvents, type SessionInfo } from "./hooks/useEvents";
 import { useHarness } from "./state/harness";
 import { LivingVoid } from "./components/LivingVoid";
@@ -119,6 +120,7 @@ export function App() {
   const timelineVisible = isMobile ? timelineOverlay : true;
 
   return (
+    <MotionConfig reducedMotion="user" transition={{ duration: 0.42, ease: [0.16, 1, 0.3, 1] }}>
     <div className="relative h-full w-full overflow-hidden">
       <LivingVoid />
 
@@ -177,5 +179,6 @@ export function App() {
       />
       <SettingsSheet />
     </div>
+    </MotionConfig>
   );
 }

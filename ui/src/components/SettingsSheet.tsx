@@ -4,7 +4,6 @@
  * Density (Zen / Calm / Full), model label, timeline overlay vs column.
  */
 import { Dialog } from "@base-ui-components/react/dialog";
-import { motion, AnimatePresence } from "motion/react";
 import { useHarness, type Density } from "../state/harness";
 
 const DENSITY_OPTIONS: { value: Density; label: string; help: string }[] = [
@@ -23,33 +22,12 @@ export function SettingsSheet() {
 
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
-      <AnimatePresence>
-        {open && (
-          <Dialog.Portal keepMounted>
-            <Dialog.Backdrop
-              render={
-                <motion.div
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.22 }}
-                  className="fixed inset-0 z-[100]"
-                  style={{ background: "rgba(0,0,0,0.72)", backdropFilter: "blur(8px)" }}
-                />
-              }
-            />
-            <Dialog.Popup
-              render={
-                <motion.div
-                  initial={{ opacity: 0, x: 24 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: 24 }}
-                  transition={{ duration: 0.42, ease: [0.16, 1, 0.3, 1] }}
-                  className="glass glass-active fixed right-4 top-4 bottom-4 z-[110] w-[360px] max-w-[calc(100vw-32px)] flex flex-col overflow-hidden rounded-xl"
-                  style={{ borderColor: "var(--line-cyan)" }}
-                />
-              }
-            >
+      <Dialog.Portal>
+        <Dialog.Backdrop className="dialog-backdrop" />
+        <Dialog.Popup
+          className="dialog-popup dialog-popup-settings glass glass-active flex flex-col overflow-hidden rounded-xl"
+          style={{ borderColor: "var(--line-cyan)" }}
+        >
               <div className="hairline-b px-5 py-4 flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <span className="diamond diamond-cyan" aria-hidden="true" />
@@ -115,10 +93,8 @@ export function SettingsSheet() {
               <div className="hairline-t px-5 py-3 text-[10px] text-[var(--dim)] tracking-[0.06em]">
                 Absolute Void · ATerm v0.1.0
               </div>
-            </Dialog.Popup>
-          </Dialog.Portal>
-        )}
-      </AnimatePresence>
+        </Dialog.Popup>
+      </Dialog.Portal>
     </Dialog.Root>
   );
 }

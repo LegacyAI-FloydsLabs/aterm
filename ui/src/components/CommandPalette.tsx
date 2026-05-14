@@ -6,7 +6,6 @@
  */
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { Dialog } from "@base-ui-components/react/dialog";
-import { motion, AnimatePresence } from "motion/react";
 import { apiDo } from "../hooks/useApi";
 import type { SessionInfo } from "../hooks/useEvents";
 import { useHarness, type Layout } from "../state/harness";
@@ -227,33 +226,12 @@ export function CommandPalette({ sessions, activeSessionId, onSelectSession }: P
 
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
-      <AnimatePresence>
-        {open && (
-          <Dialog.Portal keepMounted>
-            <Dialog.Backdrop
-              render={
-                <motion.div
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.22 }}
-                  className="fixed inset-0 z-[100]"
-                  style={{ background: "rgba(0,0,0,0.72)", backdropFilter: "blur(8px)" }}
-                />
-              }
-            />
-            <Dialog.Popup
-              render={
-                <motion.div
-                  initial={{ opacity: 0, y: -8, scale: 0.98 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: -8, scale: 0.98 }}
-                  transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
-                  className="glass glass-active fixed left-1/2 top-[15vh] z-[110] w-[560px] max-w-[calc(100vw-32px)] max-h-[60vh] flex flex-col overflow-hidden rounded-xl -translate-x-1/2"
-                  style={{ borderColor: "var(--line-cyan)" }}
-                />
-              }
-            >
+      <Dialog.Portal>
+        <Dialog.Backdrop className="dialog-backdrop" />
+        <Dialog.Popup
+          className="dialog-popup dialog-popup-palette glass glass-active flex flex-col overflow-hidden rounded-xl"
+          style={{ borderColor: "var(--line-cyan)" }}
+        >
               <Dialog.Title className="sr-only">Command palette</Dialog.Title>
               <div className="relative hairline-b">
                 <span className="absolute left-4 top-1/2 -translate-y-1/2 text-[var(--cyan)]">
@@ -317,10 +295,8 @@ export function CommandPalette({ sessions, activeSessionId, onSelectSession }: P
                   </div>
                 ))}
               </div>
-            </Dialog.Popup>
-          </Dialog.Portal>
-        )}
-      </AnimatePresence>
+        </Dialog.Popup>
+      </Dialog.Portal>
     </Dialog.Root>
   );
 }

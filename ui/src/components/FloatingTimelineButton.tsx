@@ -2,7 +2,7 @@
  * FloatingTimelineButton — vivid blue Apple-style FAB in the bottom-right.
  * Toggles the right timeline column or, on small screens, the timeline drawer.
  */
-import { motion } from "motion/react";
+import { motion, useReducedMotion } from "motion/react";
 import { usePointerFlare } from "../hooks/usePointerFlare";
 
 interface Props {
@@ -12,15 +12,16 @@ interface Props {
 
 export function FloatingTimelineButton({ expanded, onToggle }: Props) {
   const flare = usePointerFlare<HTMLButtonElement>(1.2);
+  const reduced = useReducedMotion();
   return (
     <motion.button
       {...flare}
       onClick={onToggle}
-      initial={{ opacity: 0, y: 24, scale: 0.92 }}
+      initial={reduced ? false : { opacity: 0, y: 24, scale: 0.92 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
-      whileHover={{ y: -3 }}
-      whileTap={{ scale: 0.96 }}
-      transition={{ duration: 0.52, ease: [0.16, 1, 0.3, 1] }}
+      whileHover={reduced ? undefined : { y: -3 }}
+      whileTap={reduced ? undefined : { scale: 0.96 }}
+      transition={{ duration: reduced ? 0.001 : 0.52, ease: [0.16, 1, 0.3, 1] }}
       className="flare fixed z-30 grid place-items-center rounded-full border"
       style={{
         right: "28px",
@@ -43,7 +44,7 @@ export function FloatingTimelineButton({ expanded, onToggle }: Props) {
         viewBox="0 0 28 28"
         fill="none"
         animate={{ rotate: expanded ? 180 : 0 }}
-        transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
+        transition={{ duration: reduced ? 0.001 : 0.5, ease: [0.16, 1, 0.3, 1] }}
         aria-hidden="true"
       >
         <path
