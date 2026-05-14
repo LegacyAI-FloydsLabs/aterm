@@ -1,7 +1,7 @@
 /**
- * Status bar — connection state, active session info, state detection display, theme toggle.
+ * Status bar — connection + active session + state detection. Quiet footer.
  */
-import { useState, useEffect } from "react";
+import { motion } from "motion/react";
 
 interface Props {
   connected: boolean;
@@ -11,72 +11,62 @@ interface Props {
   stateMethod: string | null;
 }
 
-const STATUS_LABELS: Record<string, string> = {
+const STATUS_LABEL: Record<string, string> = {
   ready: "Ready",
   busy: "Busy",
-  waiting_for_input: "Waiting for input",
+  waiting_for_input: "Waiting",
   error: "Error",
   stopped: "Stopped",
   exited: "Exited",
   starting: "Starting",
 };
 
-function getTheme(): "dark" | "light" {
-  if (typeof window === "undefined") return "dark";
-  return (localStorage.getItem("aterm-theme") as "dark" | "light") ?? "dark";
-}
-
-function applyTheme(theme: "dark" | "light"): void {
-  document.documentElement.setAttribute("data-theme", theme);
-  localStorage.setItem("aterm-theme", theme);
-}
-
-export function StatusBar({ connected, sessionName, sessionStatus, stateConfidence, stateMethod }: Props) {
-  const [theme, setTheme] = useState<"dark" | "light">(getTheme);
-
-  useEffect(() => {
-    applyTheme(theme);
-  }, [theme]);
-
-  const toggleTheme = () => setTheme((t) => (t === "dark" ? "light" : "dark"));
-
+export function StatusBar({
+  connected,
+  sessionName,
+  sessionStatus,
+  stateConfidence,
+  stateMethod,
+}: Props) {
   return (
-    <div className="h-6 bg-[var(--bg-panel)] border-t border-[var(--border)] flex items-center px-3 gap-3 text-xs text-[var(--text)] shrink-0">
-      <div
-        className="w-2 h-2 rounded-full"
-        style={{ background: connected ? "var(--green)" : "var(--red)" }}
-      />
-      <span>{connected ? "Connected" : "Disconnected"}</span>
+    <motion.footer
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.42, ease: [0.16, 1, 0.3, 1] }}
+      className="glass-strong hairline-t h-7 flex items-center px-3 gap-3 text-[10.5px] text-[var(--muted)] shrink-0 tracking-[0.04em]"
+      role="status"
+      aria-live="polite"
+    >
+      <div className="flex items-center gap-2">
+        <span
+          className="w-1.5 h-1.5 rounded-full"
+          style={{
+            background: connected ? "var(--green)" : "var(--red)",
+            boxShadow: connected ? "0 0 8px var(--green)" : "0 0 8px var(--red)",
+          }}
+          aria-hidden="true"
+        />
+        <span>{connected ? "connected" : "disconnected"}</span>
+      </div>
 
-      <span className="opacity-30">|</span>
+      <span className="text-[var(--dim)]">·</span>
 
       {sessionName ? (
         <>
-          <span className="text-[var(--text-bright)]">{sessionName}</span>
-          <span className="opacity-70">
-            {STATUS_LABELS[sessionStatus ?? ""] ?? sessionStatus ?? "unknown"}
-          </span>
+          <span className="text-[var(--text-dim)]">{sessionName}</span>
+          <span>{STATUS_LABEL[sessionStatus ?? ""] ?? sessionStatus ?? "—"}</span>
           {stateConfidence !== null && (
-            <span className="opacity-40">
-              {Math.round(stateConfidence * 100)}% via {stateMethod}
+            <span className="text-[var(--dim)]">
+              {Math.round(stateConfidence * 100)}% · {stateMethod}
             </span>
           )}
         </>
       ) : (
-        <span className="opacity-50">No session selected</span>
+        <span className="text-[var(--dim)]">no session selected</span>
       )}
 
       <span className="flex-1" />
-      <button
-        onClick={toggleTheme}
-        className="bg-transparent border border-[var(--border)] rounded px-1.5 py-0.5 cursor-pointer text-[10px]"
-        style={{ color: "var(--text-muted)" }}
-        title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
-        aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
-      >
-        {theme === "dark" ? "Light" : "Dark"}
-      </button>
-      <span className="opacity-40">ATerm v0.1.0 — port 9600</span>
-    </div>
+      <span className="text-[var(--dim)]">ATerm v0.1.0 · port 9600</span>
+    </motion.footer>
   );
 }

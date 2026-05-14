@@ -7,7 +7,14 @@ function getToken(): string {
   return params.get("token") ?? "";
 }
 
-export async function apiDo(body: Record<string, unknown>): Promise<any> {
+export interface ApiResult {
+  ok: boolean;
+  id?: string;
+  marks?: Array<{ id: number; ref: string; type: "command" | "output" | "error" | "prompt"; text: string; lines: number }>;
+  [key: string]: unknown;
+}
+
+export async function apiDo(body: Record<string, unknown>): Promise<ApiResult> {
   const resp = await fetch("/api/do", {
     method: "POST",
     headers: {
@@ -16,7 +23,7 @@ export async function apiDo(body: Record<string, unknown>): Promise<any> {
     },
     body: JSON.stringify(body),
   });
-  return resp.json();
+  return (await resp.json()) as ApiResult;
 }
 
 export function wsUrl(sessionId: string): string {

@@ -1,16 +1,27 @@
 /**
- * ATerm App — Floyd's terminal.
+ * ATerm — HarnessShell.
  *
- * Command palette (Ctrl+K), keyboard navigation (Ctrl+1-9, Ctrl+Tab),
- * grid/tab/split layouts, push-driven session list.
+ * Three-column glass shell over an Absolute Void background:
+ *   left  — SessionsSidebar (real PTY sessions, WS-driven)
+ *   center — HarnessHeader + CenterStage (terminal grid / quiet void)
+ *   right — TimelineSidebar (event log)
+ *   fab   — FloatingTimelineButton (bottom-right Apple-blue)
+ *
+ * State is centralized in useHarness (Zustand). Layout, drawer behavior,
+ * palette + settings open state, density, model, timeline events.
  */
-import { useState, useCallback } from "react";
-import { Sidebar } from "./components/Sidebar";
-import { Terminal } from "./components/Terminal";
-import { StatusBar } from "./components/StatusBar";
-import { CommandPalette } from "./components/CommandPalette";
-import { MarksPanel } from "./components/MarksPanel";
+import { useState, useCallback, useEffect, useSyncExternalStore } from "react";
 import { useEvents, type SessionInfo } from "./hooks/useEvents";
+import { useHarness } from "./state/harness";
+import { LivingVoid } from "./components/LivingVoid";
+import { HarnessHeader } from "./components/HarnessHeader";
+import { SessionsSidebar } from "./components/SessionsSidebar";
+import { CenterStage } from "./components/CenterStage";
+import { TimelineSidebar } from "./components/TimelineSidebar";
+import { FloatingTimelineButton } from "./components/FloatingTimelineButton";
+import { CommandPalette } from "./components/CommandPalette";
+import { SettingsSheet } from "./components/SettingsSheet";
+import { StatusBar } from "./components/StatusBar";
 
 interface StateInfo {
   state: string;
@@ -19,22 +30,52 @@ interface StateInfo {
   detail: string;
 }
 
-type Layout = "single" | "tabs" | "auto" | "2x1" | "3x1" | "2x2";
+function subscribeMatch(query: string) {
+  return (notify: () => void) => {
+    const mql = window.matchMedia(query);
+    mql.addEventListener("change", notify);
+    return () => mql.removeEventListener("change", notify);
+  };
+}
+
+function useMediaQuery(query: string): boolean {
+  return useSyncExternalStore(
+    subscribeMatch(query),
+    () => window.matchMedia(query).matches,
+    () => false
+  );
+}
 
 export function App() {
   const { sessions, connected } = useEvents();
   const [activeSession, setActiveSession] = useState<SessionInfo | null>(null);
   const [stateInfo, setStateInfo] = useState<StateInfo | null>(null);
-  const [sidebarVisible, setSidebarVisible] = useState(true);
-  const [layout, setLayout] = useState<Layout>("single");
-  const [marksVisible, setMarksVisible] = useState(false);
 
-  const handleSelectSession = useCallback((session: SessionInfo) => {
-    setActiveSession(session);
-    setStateInfo(null);
-  }, []);
+  const sidebarVisible = useHarness((s) => s.sidebarVisible);
+  const toggleSidebar = useHarness((s) => s.toggleSidebar);
+  const timelineExpanded = useHarness((s) => s.timelineExpanded);
+  const toggleTimeline = useHarness((s) => s.toggleTimeline);
+  const timelineOverlay = useHarness((s) => s.timelineOverlay);
+  const toggleTimelineOverlay = useHarness((s) => s.toggleTimelineOverlay);
+  const setActiveSessionId = useHarness((s) => s.setActiveSession);
+  const setPaletteOpen = useHarness((s) => s.setPaletteOpen);
 
-  const handleStateChange = useCallback((msg: any) => {
+  const isMobile = useMediaQuery("(max-width: 900px)");
+
+  const handleSelectSession = useCallback(
+    (s: SessionInfo) => {
+      setActiveSession(s);
+      setStateInfo(null);
+      setActiveSessionId(s.id);
+      if (isMobile) {
+        // close the drawer after picking on mobile
+        useHarness.setState({ sidebarVisible: false });
+      }
+    },
+    [isMobile, setActiveSessionId]
+  );
+
+  const handleStateChange = useCallback((msg: StateInfo) => {
     setStateInfo({
       state: msg.state,
       confidence: msg.confidence,
@@ -43,212 +84,98 @@ export function App() {
     });
   }, []);
 
-  const toggleSidebar = useCallback(() => {
-    setSidebarVisible((v) => !v);
-  }, []);
-
-  // Keep active session status in sync with events
+  // keep active session's status in sync with WS events
   const activeStatus = activeSession
-    ? sessions.find((s) => s.id === activeSession.id)?.status ?? stateInfo?.state ?? activeSession.status
+    ? sessions.find((s) => s.id === activeSession.id)?.status ??
+      stateInfo?.state ??
+      activeSession.status
     : null;
 
-  // Determine which sessions to show in grid view
-  const gridSessions = layout === "single"
-    ? (activeSession ? [activeSession] : [])
-    : sessions.filter((s) => s.status !== "stopped" && s.status !== "exited");
+  // clear local active state if the session was deleted — synchronizes
+  // local React state with the WS-pushed session list (external system).
+  useEffect(() => {
+    if (activeSession && !sessions.find((s) => s.id === activeSession.id)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setActiveSession(null);
+      setActiveSessionId(null);
+    }
+  }, [sessions, activeSession, setActiveSessionId]);
 
-  const gridClass = {
-    single: "grid-cols-1",
-    tabs: "grid-cols-1",
-    auto: "grid-cols-[repeat(auto-fill,minmax(480px,1fr))]",
-    "2x1": "grid-cols-2",
-    "3x1": "grid-cols-3",
-    "2x2": "grid-cols-2",
-  }[layout];
+  // sync sidebar visibility to viewport size (subscribe-to-external-source pattern)
+  useEffect(() => {
+    useHarness.setState({ sidebarVisible: !isMobile });
+  }, [isMobile]);
+
+  // FAB behavior: desktop expands width; mobile toggles overlay drawer
+  const onToggleFab = useCallback(() => {
+    if (isMobile) {
+      toggleTimelineOverlay();
+    } else {
+      toggleTimeline();
+    }
+  }, [isMobile, toggleTimeline, toggleTimelineOverlay]);
+
+  const timelineDrawerMode = isMobile;
+  const timelineVisible = isMobile ? timelineOverlay : true;
 
   return (
-    <div className="flex flex-col h-screen w-screen" role="application" aria-label="ATerm terminal emulator">
-      {/* Command Palette */}
+    <div className="relative h-full w-full overflow-hidden">
+      <LivingVoid />
+
+      {/* shell */}
+      <div className="relative z-10 flex h-full w-full">
+        <SessionsSidebar
+          sessions={sessions}
+          activeSessionId={activeSession?.id ?? null}
+          onSelectSession={handleSelectSession}
+          drawerMode={isMobile}
+          visible={sidebarVisible}
+          onClose={() => useHarness.setState({ sidebarVisible: false })}
+        />
+
+        <div className="flex-1 flex flex-col min-w-0 min-h-0">
+          <HarnessHeader
+            onToggleSidebar={toggleSidebar}
+            onTogglePalette={() => setPaletteOpen(true)}
+          />
+          <CenterStage
+            sessions={sessions}
+            activeSession={activeSession}
+            onSelectSession={handleSelectSession}
+            onStateChange={handleStateChange}
+          />
+          <StatusBar
+            connected={connected}
+            sessionName={activeSession?.name ?? null}
+            sessionStatus={activeStatus ?? null}
+            stateConfidence={stateInfo?.confidence ?? null}
+            stateMethod={stateInfo?.method ?? null}
+          />
+        </div>
+
+        <TimelineSidebar
+          drawerMode={timelineDrawerMode}
+          visible={timelineVisible}
+          onClose={() =>
+            isMobile
+              ? useHarness.setState({ timelineOverlay: false })
+              : useHarness.setState({ timelineExpanded: false })
+          }
+          expanded={timelineExpanded}
+        />
+      </div>
+
+      <FloatingTimelineButton
+        expanded={isMobile ? timelineOverlay : timelineExpanded}
+        onToggle={onToggleFab}
+      />
+
       <CommandPalette
         sessions={sessions}
         activeSessionId={activeSession?.id ?? null}
         onSelectSession={handleSelectSession}
-        onToggleSidebar={toggleSidebar}
-        onSetLayout={(l) => setLayout(l as Layout)}
       />
-
-      <div className="flex flex-1 overflow-hidden">
-        {/* Sidebar */}
-        {sidebarVisible && (
-          <Sidebar
-            sessions={sessions}
-            activeSessionId={activeSession?.id ?? null}
-            onSelectSession={handleSelectSession}
-          />
-        )}
-
-        {/* Main area */}
-        <main className="flex-1 flex flex-col overflow-hidden">
-          {/* Toolbar */}
-          <div
-            className="flex items-center gap-2 px-3 py-1.5 shrink-0 border-b border-[var(--border)]"
-            style={{ background: "var(--bg-panel)" }}
-          >
-            <button
-              onClick={toggleSidebar}
-              className="bg-transparent border-none cursor-pointer text-sm min-w-[24px] min-h-[24px] p-2 rounded"
-              style={{ color: "var(--text)" }}
-              title="Toggle sidebar (Ctrl+B)"
-              aria-label="Toggle sidebar"
-            >
-              ☰
-            </button>
-            <span className="text-sm font-semibold" style={{ color: "var(--text-bright)" }}>
-              Terminals
-            </span>
-            <span className="flex-1" />
-
-            {/* Layout selector */}
-            <select
-              value={layout}
-              onChange={(e) => setLayout(e.target.value as Layout)}
-              className="text-xs px-2 py-1 rounded cursor-pointer border border-[var(--border)]"
-              style={{ background: "var(--bg-input)", color: "var(--text)" }}
-              aria-label="Select terminal layout"
-            >
-              <option value="single">Single</option>
-              <option value="auto">Auto Grid</option>
-              <option value="2x1">2 columns</option>
-              <option value="3x1">3 columns</option>
-              <option value="2x2">2x2 Grid</option>
-              <option value="tabs">Tabs</option>
-            </select>
-
-            {/* Palette button */}
-            <button
-              onClick={() => setMarksVisible((v) => !v)}
-              className="bg-transparent border-none cursor-pointer text-xs px-2 py-1 rounded"
-              style={{
-                color: marksVisible ? "var(--accent)" : "var(--text)",
-                background: marksVisible ? "var(--bg-input)" : undefined,
-              }}
-              title="Toggle output marks panel"
-            >
-              Marks
-            </button>
-            <button
-              onClick={() => {
-                // Trigger Ctrl+K programmatically
-                window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true }));
-              }}
-              className="bg-transparent border-none cursor-pointer text-xs px-2 py-1 rounded"
-              style={{ color: "var(--text)", background: "var(--bg-input)" }}
-              title="Command Palette (Ctrl+K)"
-            >
-              ⌘K
-            </button>
-          </div>
-
-          {/* Tab bar (when in tabs mode) */}
-          {layout === "tabs" && sessions.length > 0 && (
-            <div
-              className="flex overflow-x-auto shrink-0 border-b border-[var(--border)] px-2"
-              style={{ background: "var(--bg-panel)" }}
-            >
-              {sessions
-                .filter((s) => s.status !== "stopped")
-                .map((s) => (
-                  <button
-                    key={s.id}
-                    onClick={() => handleSelectSession(s)}
-                    className="px-4 py-2 cursor-pointer text-sm whitespace-nowrap border-none bg-transparent"
-                    style={{
-                      color: activeSession?.id === s.id ? "var(--text-bright)" : "var(--text)",
-                      borderBottom: activeSession?.id === s.id ? "2px solid var(--accent)" : "2px solid transparent",
-                    }}
-                  >
-                    {s.label ?? s.name}
-                  </button>
-                ))}
-            </div>
-          )}
-
-          {/* Terminal grid */}
-          {gridSessions.length > 0 ? (
-            <div className={`flex-1 overflow-auto p-4 grid ${gridClass} gap-4 content-start`}>
-              {(layout === "single" || layout === "tabs"
-                ? (activeSession ? [activeSession] : [])
-                : gridSessions
-              ).map((s) => (
-                <div
-                  key={s.id}
-                  className="rounded-md border overflow-hidden flex flex-col"
-                  style={{
-                    background: "var(--bg-panel)",
-                    borderColor: activeSession?.id === s.id ? "var(--accent)" : "var(--border)",
-                    minHeight: layout === "single" || layout === "tabs" ? "calc(100vh - 120px)" : "300px",
-                    height: layout === "2x2" ? "calc(50vh - 80px)" : undefined,
-                  }}
-                  onClick={() => handleSelectSession(s)}
-                >
-                  {/* Frame header */}
-                  <div
-                    className="flex items-center gap-2 px-2.5 py-1.5 shrink-0 border-b border-[var(--border)]"
-                    style={{ background: "var(--bg-header)" }}
-                  >
-                    <div
-                      className="w-2.5 h-2.5 rounded-full shrink-0"
-                      style={{
-                        background:
-                          s.status === "ready" ? "var(--green)"
-                          : s.status === "busy" ? "var(--yellow)"
-                          : s.status === "error" ? "var(--red)"
-                          : s.status === "waiting_for_input" ? "var(--orange)"
-                          : "var(--border)",
-                      }}
-                    />
-                    <span className="text-sm font-semibold flex-1 overflow-hidden text-ellipsis whitespace-nowrap"
-                      style={{ color: "var(--text-bright)" }}
-                    >
-                      {s.label ?? s.name}
-                    </span>
-                    <span className="text-[0.65rem]" style={{ color: "var(--text-muted)" }}>{s.status}</span>
-                  </div>
-
-                  {/* Terminal + Marks */}
-                  <div className="flex-1 overflow-hidden flex">
-                    <div className="flex-1 overflow-hidden">
-                      <Terminal
-                        sessionId={s.id}
-                        onStateChange={activeSession?.id === s.id ? handleStateChange : undefined}
-                      />
-                    </div>
-                    {marksVisible && activeSession?.id === s.id && (
-                      <MarksPanel sessionId={s.id} visible={marksVisible} />
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="flex-1 flex items-center justify-center flex-col gap-3" style={{ color: "var(--text-muted)" }}>
-              <div className="text-3xl">$_</div>
-              <div className="text-sm">Select a session or create a new one</div>
-              <div className="text-xs" style={{ color: "var(--text-muted)" }}>
-                Ctrl+K command palette &middot; Ctrl+1-9 switch sessions
-              </div>
-            </div>
-          )}
-        </main>
-      </div>
-
-      <StatusBar
-        connected={connected}
-        sessionName={activeSession?.name ?? null}
-        sessionStatus={activeStatus ?? null}
-        stateConfidence={stateInfo?.confidence ?? null}
-        stateMethod={stateInfo?.method ?? null}
-      />
+      <SettingsSheet />
     </div>
   );
 }
