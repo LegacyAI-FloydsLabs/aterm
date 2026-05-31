@@ -4,7 +4,7 @@
  */
 import { AnimatePresence, motion } from "motion/react";
 import { useState } from "react";
-import { apiDo } from "../hooks/useApi";
+import { ApiError, apiDo, hasAuthToken } from "../hooks/useApi";
 import type { SessionInfo } from "../hooks/useEvents";
 import { useHarness } from "../state/harness";
 import { usePointerFlare } from "../hooks/usePointerFlare";
@@ -49,38 +49,62 @@ export function SessionsSidebar({
   const [name, setName] = useState("");
   const [command, setCommand] = useState("bash");
   const [directory, setDirectory] = useState("");
+  const [error, setError] = useState<string | null>(null);
   const pushTimeline = useHarness((s) => s.pushTimeline);
   const newSessionFlare = usePointerFlare<HTMLButtonElement>();
 
+  const authReady = hasAuthToken();
+
+  const apiErrorMessage = (err: unknown): string => {
+    if (err instanceof ApiError) return err.message;
+    if (err instanceof Error) return err.message;
+    return "ATerm request failed";
+  };
+
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError(null);
     if (!name.trim()) return;
+    if (!authReady) {
+      setError("Missing ATerm auth token. Open the tokenized URL printed by the ATerm server.");
+      return;
+    }
+
     const trimmed = name.trim();
-    const data = await apiDo({
-      action: "create",
-      session: trimmed,
-      command: command.trim() || "bash",
-      ...(directory.trim() ? { directory: directory.trim() } : {}),
-      auto_start: true,
-    });
-    if (data.ok && data.id) {
-      setName("");
-      setCommand("bash");
-      setDirectory("");
-      setShowForm(false);
-      pushTimeline({
-        kind: "session_created",
-        label: `Session · ${trimmed}`,
-        detail: command.trim() || "bash",
-        sessionId: data.id,
+    try {
+      const data = await apiDo({
+        action: "create",
+        session: trimmed,
+        command: command.trim() || "bash",
+        ...(directory.trim() ? { directory: directory.trim() } : {}),
+        auto_start: true,
       });
-      onSelectSession({ id: data.id, name: trimmed, status: "starting" });
+      if (data.ok && data.id) {
+        setName("");
+        setCommand("bash");
+        setDirectory("");
+        setShowForm(false);
+        pushTimeline({
+          kind: "session_created",
+          label: `Session · ${trimmed}`,
+          detail: command.trim() || "bash",
+          sessionId: data.id,
+        });
+        onSelectSession({ id: data.id, name: trimmed, status: "starting" });
+      }
+    } catch (err) {
+      setError(apiErrorMessage(err));
     }
   };
 
   const handleDelete = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    await apiDo({ action: "delete", session: id });
+    setError(null);
+    try {
+      await apiDo({ action: "delete", session: id });
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    }
   };
 
   const activeCount = sessions.filter(
@@ -162,9 +186,15 @@ export function SessionsSidebar({
               className="px-2.5 py-2 text-[12px] rounded-md border border-[var(--line)] bg-black/40 text-[var(--text)] placeholder:text-[var(--dim)] focus:border-[var(--line-cyan)]"
               style={{ transition: "border-color var(--t-fast) var(--easing)" }}
             />
+            {(!authReady || error) && (
+              <p className="rounded-md border border-[var(--red)]/50 bg-[var(--red)]/10 px-2.5 py-2 text-[11px] text-[var(--red)]" role="alert">
+                {error ?? "Missing auth token. Open the tokenized ATerm URL printed by the server."}
+              </p>
+            )}
             <button
               type="submit"
-              className="py-2 rounded-md text-[12px] tracking-[0.06em] border border-[var(--line-cyan)] bg-[var(--cyan-soft)] text-[var(--cyan)] hover:bg-[var(--cyan-dim)]"
+              disabled={!authReady || !name.trim()}
+              className="py-2 rounded-md text-[12px] tracking-[0.06em] border border-[var(--line-cyan)] bg-[var(--cyan-soft)] text-[var(--cyan)] hover:bg-[var(--cyan-dim)] disabled:cursor-not-allowed disabled:border-[var(--line)] disabled:bg-transparent disabled:text-[var(--dim)]"
               style={{ transition: "background var(--t-fast) var(--easing)" }}
             >
               Start

@@ -65,6 +65,11 @@ export function Terminal({ sessionId, onStateChange }: Props) {
       if (disposedRef.current) return;
 
       const url = wsUrl(sessionId);
+      if (!url) {
+        term.write("\r\n\x1b[38;5;203m[missing ATerm auth token — open the server's tokenized URL]\x1b[0m\r\n");
+        return;
+      }
+
       const ws = new WebSocket(url);
       wsRef.current = ws;
 

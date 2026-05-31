@@ -44,6 +44,11 @@ export interface PtyInstance {
   lastCommandOutputStartOffset: number | null;
   lastOutputAt: number | null;
   commandActive: boolean;
+  /** Monotonic counter incremented on every write. Used by waitForState to
+   *  bind completion-waits to the exact command they were paired with. */
+  commandSeq: number;
+  /** Last commandSeq for which a terminal state has been observed. */
+  lastCompletedSeq: number;
   currentCwd: string;
   currentEnv: Record<string, string>;
   commandHistory: string[];
@@ -81,6 +86,8 @@ export class PtyPool extends EventEmitter {
       lastCommandOutputStartOffset: null,
       lastOutputAt: null,
       commandActive: false,
+      commandSeq: 0,
+      lastCompletedSeq: 0,
       currentCwd: opts.cwd,
       currentEnv: { ...(opts.env ?? {}) },
       commandHistory: [],
@@ -207,6 +214,7 @@ export class PtyPool extends EventEmitter {
       inst.lastCommandText = cleaned;
       inst.lastCommandOutputStartOffset = inst.markSource.length;
       inst.commandActive = true;
+      inst.commandSeq += 1;
       this._trackShellState(inst, cleaned);
     }
 
@@ -275,10 +283,32 @@ export class PtyPool extends EventEmitter {
     return [...this.instances.keys()];
   }
 
-  /** Destroy all PTYs */
+  /** Destroy all PTYs. Used on shutdown; sends SIGHUP via node-pty then
+   *  follows up with SIGKILL on any survivor after a brief grace window.
+   *  Synchronous to keep signal-handler semantics simple. */
   destroyAll(): void {
+    const survivors: PtyInstance[] = [];
     for (const id of this.ids()) {
-      this.remove(id);
+      const inst = this.instances.get(id);
+      if (!inst) continue;
+      // Disable auto-restart before signalling.
+      inst.restartPolicy = { maxRetries: 0, windowSeconds: 0 };
+      const pid = inst.pid;
+      try {
+        inst.process?.kill();
+      } catch { /* already gone */ }
+      if (pid !== null && pid > 0) survivors.push(inst);
+      this.instances.delete(id);
+    }
+    // Best-effort SIGKILL fallback for any PID still alive a tick later.
+    // setImmediate so we don't block the signal handler.
+    if (survivors.length > 0) {
+      setImmediate(() => {
+        for (const inst of survivors) {
+          if (inst.pid === null) continue;
+          try { process.kill(inst.pid, "SIGKILL"); } catch { /* already reaped */ }
+        }
+      });
     }
   }
 }

@@ -33,6 +33,11 @@ export function useEvents() {
 
   const connect = useCallback(() => {
     const url = wsUrl("events");
+    if (!url) {
+      setConnected(false);
+      return;
+    }
+
     const ws = new WebSocket(url);
     wsRef.current = ws;
 

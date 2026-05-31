@@ -182,22 +182,47 @@ function handleRead(c: Context, mgr: SessionManager, body: DoRequest) {
   });
 }
 
-/** Event-driven wait for session to reach a terminal state. Replaces polling loops. */
+/** Event-driven wait for THIS command (identified by targetSeq) to complete.
+ *
+ * Hazards countered:
+ *   - Stale terminal state at call time (pre-write status still "ready").
+ *   - Back-to-back writes where a later command's prompt arrives and the
+ *     detector clears commandActive once for an earlier command we weren't
+ *     waiting on. The monotonic (commandSeq, lastCompletedSeq) pair lets us
+ *     bind the wait to the exact write we just issued.
+ *   - Session torn down or PTY exited mid-wait → resolve cleanly.
+ *   - Timeout firing concurrently with a successful state event → setTimeout
+ *     is cleared inside the handler before resolve() to keep the listener
+ *     count at zero on exit.
+ */
 function waitForState(
   mgr: SessionManager,
   sessionId: string,
   terminalStates: string[],
   timeoutMs: number,
+  targetSeq?: number,
 ): Promise<void> {
   return new Promise((resolve) => {
-    const s = mgr.get(sessionId);
-    if (s && terminalStates.includes(s.status)) { resolve(); return; }
+    const isComplete = (): boolean => {
+      const pty = mgr.getPty(sessionId);
+      if (!pty) return true;
+      if (!pty.running) return true;
+      if (typeof targetSeq === "number") {
+        if (pty.lastCompletedSeq < targetSeq) return false;
+      } else if (pty.commandActive) {
+        return false;
+      }
+      const s = mgr.get(sessionId);
+      return !!(s && terminalStates.includes(s.status));
+    };
+
+    if (isComplete()) { resolve(); return; }
 
     const timer = setTimeout(() => { mgr.off("state", handler); resolve(); }, timeoutMs);
 
-    const handler = (id: string, result: any) => {
+    const handler = (id: string) => {
       if (id !== sessionId) return;
-      if (terminalStates.includes(result.state)) {
+      if (isComplete()) {
         clearTimeout(timer);
         mgr.off("state", handler);
         resolve();
@@ -219,7 +244,27 @@ async function handleRun(c: Context, mgr: SessionManager, body: DoRequest) {
     await delay(1000); // Wait for shell to initialize
   }
 
+  // Enterprise correctness: one in-flight command per session. Concurrent
+  // run() calls would interleave writes into bash's input buffer and corrupt
+  // command↔output attribution. Reject with 409 instead of queuing — queues
+  // are unbounded attack surfaces under load. Callers can poll or use cancel.
+  {
+    const pty = mgr.getPty(session.id);
+    if (pty && pty.commandActive) {
+      return c.json({
+        ok: false,
+        error: "session busy",
+        hint: "A command is already running in this session. Wait for it to complete or call cancel.",
+        status: session.status,
+      }, 409);
+    }
+  }
+
   mgr.write(session.id, body.input);
+
+  // Snapshot the sequence number assigned to THIS write so the wait is
+  // bound to the exact command we just issued, not a coincident transition.
+  const targetSeq = mgr.getPty(session.id)?.commandSeq ?? 0;
 
   // Tier 2: wait_until pattern
   const timeoutMs = (body.timeout ?? 30) * 1000;
@@ -236,15 +281,15 @@ async function handleRun(c: Context, mgr: SessionManager, body: DoRequest) {
         waitMatched = true;
         break;
       }
-      // Also break if session returned to ready/error state
-      const s = mgr.get(session.id);
-      if (s && (s.status === "ready" || s.status === "error" || s.status === "exited")) {
+      // Also break if THIS command's completion has been observed.
+      const pty = mgr.getPty(session.id);
+      if (pty && pty.lastCompletedSeq >= targetSeq) {
         break;
       }
     }
   } else {
-    // No wait pattern — event-driven wait for terminal state
-    await waitForState(mgr, session.id, ["ready", "error", "exited"], Math.min(timeoutMs, 10_000));
+    // No wait pattern — event-driven wait scoped to THIS command's seq
+    await waitForState(mgr, session.id, ["ready", "error", "exited"], Math.min(timeoutMs, 10_000), targetSeq);
   }
 
   // Read result

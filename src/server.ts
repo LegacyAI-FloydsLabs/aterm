@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
+import { serveStatic } from "@hono/node-server/serve-static";
 import { cors } from "hono/cors";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -28,7 +29,29 @@ function loadOrCreateToken(): string {
 }
 
 const AUTH_TOKEN = loadOrCreateToken();
+const AUTH_TOKEN_BUF = Buffer.from(AUTH_TOKEN, "utf8");
+
 const PORT = parseInt(process.env.ATERM_PORT || "9600", 10);
+const UI_DIST = path.join(process.cwd(), "dist", "ui");
+const UI_INDEX = path.join(UI_DIST, "index.html");
+
+/** Constant-time token comparison. Returns false on any length mismatch or
+ *  non-string input — never short-circuits character-by-character, so server
+ *  response timing cannot leak byte positions of the real token. */
+function tokenMatches(provided: string | undefined | null): boolean {
+  if (typeof provided !== "string") return false;
+  const buf = Buffer.from(provided, "utf8");
+  if (buf.length !== AUTH_TOKEN_BUF.length) return false;
+  return crypto.timingSafeEqual(buf, AUTH_TOKEN_BUF);
+}
+
+function isApiPath(requestPath: string): boolean {
+  return requestPath === "/api" || requestPath.startsWith("/api/");
+}
+
+function isSpaPath(requestPath: string): boolean {
+  return !isApiPath(requestPath) && requestPath !== "/health" && !requestPath.startsWith("/ws/");
+}
 
 // ---------------------------------------------------------------------------
 // Session Manager
@@ -75,19 +98,36 @@ app.use("*", cors({
   },
 }));
 
-// Rate limiting — 60 requests/minute per token, burst to 10/sec
+// Rate limiting — 60 requests/minute per token, burst to 10/sec.
+// Bounded LRU eviction prevents the map growing without bound under an
+// adversary rotating the Authorization header.
 const rateBuckets = new Map<string, { count: number; resetAt: number }>();
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX = 60;
+const RATE_LIMIT_MAX_KEYS = 4096;
 
+function evictExpiredBuckets(now: number): void {
+  // O(n) sweep — only invoked when the map exceeds the cap, so amortised O(1).
+  for (const [k, b] of rateBuckets) {
+    if (now > b.resetAt) rateBuckets.delete(k);
+  }
+  // If still over cap (every bucket is in-window), drop the oldest insertion
+  // order entries — Map preserves insertion order natively.
+  while (rateBuckets.size > RATE_LIMIT_MAX_KEYS) {
+    const first = rateBuckets.keys().next().value;
+    if (first === undefined) break;
+    rateBuckets.delete(first);
+  }
+}
 app.use("*", async (c, next) => {
-  if (c.req.path === "/health") return next();
+  if (!isApiPath(c.req.path)) return next();
 
   const key = c.req.header("Authorization") ?? c.req.query("token") ?? "anon";
   const now = Date.now();
   let bucket = rateBuckets.get(key);
 
   if (!bucket || now > bucket.resetAt) {
+    if (rateBuckets.size >= RATE_LIMIT_MAX_KEYS) evictExpiredBuckets(now);
     bucket = { count: 0, resetAt: now + RATE_LIMIT_WINDOW_MS };
     rateBuckets.set(key, bucket);
   }
@@ -99,15 +139,16 @@ app.use("*", async (c, next) => {
 
   return next();
 });
-// Auth middleware — skip health check
+// Auth middleware — protect terminal control APIs. Static UI files are public;
+// the bearer/query token still gates every command and WebSocket upgrade.
 app.use("*", async (c, next) => {
-  if (c.req.path === "/health") return next();
+  if (!isApiPath(c.req.path)) return next();
 
   const header = c.req.header("Authorization");
   const query = new URL(c.req.url).searchParams.get("token");
   const provided = header?.replace("Bearer ", "") || query;
 
-  if (provided !== AUTH_TOKEN) {
+  if (!tokenMatches(provided)) {
     return c.json({ ok: false, error: "unauthorized" }, 401);
   }
   return next();
@@ -126,6 +167,14 @@ app.get("/health", (c) => {
 // The API
 app.post("/api/do", createDoHandler(mgr));
 
+if (fs.existsSync(UI_INDEX)) {
+  app.use("/assets/*", serveStatic({ root: UI_DIST }));
+  app.get("*", async (c, next) => {
+    if (!isSpaPath(c.req.path)) return next();
+    return serveStatic({ path: UI_INDEX })(c, next);
+  });
+}
+
 // WebSocket server for terminal I/O
 const wss = createWsServer(mgr, AUTH_TOKEN);
 
@@ -137,6 +186,7 @@ console.log("ATerm v0.1.0");
 console.log(`Port:  ${PORT}`);
 console.log(`Token: ${AUTH_TOKEN}`);
 console.log(`URL:   http://localhost:${PORT}?token=${AUTH_TOKEN}`);
+console.log(`UI:    ${fs.existsSync(UI_INDEX) ? "served from dist/ui" : "not built (run ui build for browser shell)"}`);
 if (autoStarted > 0) console.log(`Auto-started: ${autoStarted} session(s)`);
 console.log("─".repeat(60));
 
@@ -165,11 +215,27 @@ bridgeClient.ensureConnected().then((result) => {
   console.log("Anvil MCP: startup probe failed (bridge available on first call)");
 });
 
-// Graceful shutdown
-function shutdown(): void {
-  destroyBridgeClient();
-  mgr.destroy();
-  process.exit(0);
+// Graceful shutdown — idempotent, time-bounded. SIGTERM/SIGINT both route
+// here. We tear down bridge, PTYs (SIGHUP→SIGKILL), and HTTP listeners,
+// then schedule a hard process.exit(0) on a watchdog so a stuck handle
+// (e.g., open websocket) cannot prevent process termination.
+let shutdownStarted = false;
+function shutdown(signal: NodeJS.Signals | "manual" = "manual"): void {
+  if (shutdownStarted) return;
+  shutdownStarted = true;
+  try { destroyBridgeClient(); } catch { /* best-effort */ }
+  try { mgr.destroy(); } catch { /* best-effort */ }
+  try { httpServer.close(); } catch { /* best-effort */ }
+  try { wss.close(); } catch { /* best-effort */ }
+  // Hard fallback: never let a leaked handle stall shutdown indefinitely.
+  const exitTimer = setTimeout(() => process.exit(0), 1500);
+  exitTimer.unref();
+  // If event loop drains cleanly before the watchdog, exit immediately.
+  setImmediate(() => process.exit(0));
+  void signal;
 }
-process.on("SIGTERM", shutdown);
-process.on("SIGINT", shutdown);
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
+// Catch uncaught/unhandled to avoid silent corruption — surface and shutdown.
+process.on("uncaughtException", (err) => { console.error("uncaughtException:", err); shutdown("manual"); });
+process.on("unhandledRejection", (err) => { console.error("unhandledRejection:", err); });

@@ -391,6 +391,9 @@ export class SessionManager extends EventEmitter {
     const result = detector.detect(lastLine, recentOutput, ctx);
     pty.scrollback.lastConfidence = result.confidence;
     if (result.state === "ready" || result.state === "error" || result.state === "exited") {
+      // Advance the completion cursor before clearing commandActive so any
+      // waitForState reader observes a consistent (cursor, flag) snapshot.
+      if (pty.commandActive) pty.lastCompletedSeq = pty.commandSeq;
       pty.commandActive = false;
     }
     this.emit("state", sessionId, result);
