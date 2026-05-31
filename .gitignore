@@ -39,6 +39,12 @@ test-screenshots/
 # Agent research/docs (session artifacts, not project source)
 Floyd Docs/
 
+# Agent-generated review / smoke-test reports. Session artifacts that capture
+# live server output — they have leaked the .aterm-token and candid internal
+# assessments. Never commit; keep them local only.
+*_Review.md
+*_SMOKE_TEST.md
+
 # Product/strategy decks & reports — not source; keep out of the public repo
 VoidDeck/
 _REPORTS/
