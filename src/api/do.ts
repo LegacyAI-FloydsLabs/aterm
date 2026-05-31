@@ -104,7 +104,7 @@ export function createDoHandler(mgr: SessionManager) {
         case "stop": return handleStop(c, mgr, body);
         case "start": return handleStart(c, mgr, body);
         case "cancel": return handleCancel(c, mgr, body);
-        case "answer": return handleRun(c, mgr, body); // answer = run with input
+        case "answer": return handleRun(c, mgr, body); // answer = feed input to the in-flight command
         case "create": return handleCreate(c, mgr, body);
         case "delete": return handleDelete(c, mgr, body);
         case "note": return handleNote(c, mgr, body);
@@ -244,22 +244,15 @@ async function handleRun(c: Context, mgr: SessionManager, body: DoRequest) {
     await delay(1000); // Wait for shell to initialize
   }
 
-  // Enterprise correctness: one in-flight command per session. Concurrent
-  // run() calls would interleave writes into bash's input buffer and corrupt
-  // command↔output attribution. Reject with 409 instead of queuing — queues
-  // are unbounded attack surfaces under load. Callers can poll or use cancel.
-  {
-    const pty = mgr.getPty(session.id);
-    if (pty && pty.commandActive) {
-      return c.json({
-        ok: false,
-        error: "session busy",
-        hint: "A command is already running in this session. Wait for it to complete or call cancel.",
-        status: session.status,
-      }, 409);
-    }
-  }
-
+  // Command↔output attribution is kept correct by binding the wait below to a
+  // monotonic command sequence (targetSeq / lastCompletedSeq), not by rejecting
+  // concurrent calls. An earlier attempt to hard-reject when `commandActive`
+  // was true (HTTP 409) raced with the terminal's async completion detection:
+  // `commandActive` is a best-effort heuristic that lingers true between a
+  // command emitting output and its prompt-return being observed, so legitimate
+  // sequential use (run → read output → run again) and answering a waiting
+  // `read` were spuriously blocked. Real concurrency protection, if needed,
+  // belongs in a proper per-session mutex — not on this heuristic flag.
   mgr.write(session.id, body.input);
 
   // Snapshot the sequence number assigned to THIS write so the wait is
