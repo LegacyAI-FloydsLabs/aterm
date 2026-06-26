@@ -188,10 +188,11 @@ function waitForState(
   sessionId: string,
   terminalStates: string[],
   timeoutMs: number,
+  options?: { requireFreshEvent?: boolean },
 ): Promise<void> {
   return new Promise((resolve) => {
     const s = mgr.get(sessionId);
-    if (s && terminalStates.includes(s.status)) { resolve(); return; }
+    if (!options?.requireFreshEvent && s && terminalStates.includes(s.status)) { resolve(); return; }
 
     const timer = setTimeout(() => { mgr.off("state", handler); resolve(); }, timeoutMs);
 
@@ -244,7 +245,13 @@ async function handleRun(c: Context, mgr: SessionManager, body: DoRequest) {
     }
   } else {
     // No wait pattern — event-driven wait for terminal state
-    await waitForState(mgr, session.id, ["ready", "error", "exited"], Math.min(timeoutMs, 10_000));
+    await waitForState(
+      mgr,
+      session.id,
+      ["ready", "error", "exited"],
+      Math.min(timeoutMs, 10_000),
+      { requireFreshEvent: true },
+    );
   }
 
   // Read result
@@ -470,7 +477,13 @@ async function handleVerify(c: Context, mgr: SessionManager, body: DoRequest) {
 
   // Wait for completion
   // Wait for completion — event-driven
-  await waitForState(mgr, session.id, ["ready", "error", "exited"], (body.timeout ?? 60) * 1000);
+  await waitForState(
+    mgr,
+    session.id,
+    ["ready", "error", "exited"],
+    (body.timeout ?? 60) * 1000,
+    { requireFreshEvent: true },
+  );
 
   // Read output and determine pass/fail
   const output = mgr.read(session.id, "clean", { maxLines: body.lines ?? 100 });
