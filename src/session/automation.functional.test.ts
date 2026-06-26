@@ -147,7 +147,7 @@ describe("Cron fire end-to-end", { timeout: 100_000 }, () => {
       const created = await doRequest(server, {
         action: "create",
         session: "cron-target",
-        command: `touch ${fireFileName}`,
+        command: "touch cron-fired.txt",
         directory: cwd,
       });
       assert.equal(created.data.ok, true);
@@ -167,7 +167,7 @@ describe("Cron fire end-to-end", { timeout: 100_000 }, () => {
       await waitFor(() => {
         return existsSync(firePath);
       }, {
-        timeoutMs: 90_000,
+        timeoutMs: 70_000,
         intervalMs: 2_000,
         description: "cron job to fire and write timestamp",
       });
