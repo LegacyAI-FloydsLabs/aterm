@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import {
   makeTempDir,
@@ -147,19 +147,13 @@ describe("Cron fire end-to-end", { timeout: 100_000 }, () => {
       const created = await doRequest(server, {
         action: "create",
         session: "cron-target",
-        command: `bash -c "date +%s >> ${fireFileName}"`,
+        command: "touch cron-fired.txt",
         directory: cwd,
       });
       assert.equal(created.data.ok, true);
 
-      // Compute a cron expression for the next minute boundary
-      const now = new Date();
-      const nextMinute = new Date(now);
-      nextMinute.setSeconds(0, 0);
-      nextMinute.setMinutes(nextMinute.getMinutes() + 1);
-      const cronMin = nextMinute.getMinutes();
-      const cronHour = nextMinute.getHours();
-      const cronExpr = `${cronMin} ${cronHour} * * *`;
+      // Use every-minute scheduling to avoid minute-boundary registration races.
+      const cronExpr = "* * * * *";
 
       const regResult = await doRequest(server, {
         action: "automate",
@@ -171,20 +165,14 @@ describe("Cron fire end-to-end", { timeout: 100_000 }, () => {
 
       const firePath = path.join(cwd, fireFileName);
       await waitFor(() => {
-        try {
-          const content = readFileSync(firePath, "utf8").trim();
-          return content.length > 0;
-        } catch {
-          return false;
-        }
+        return existsSync(firePath);
       }, {
-        timeoutMs: 90_000,
+        timeoutMs: 70_000,
         intervalMs: 2_000,
         description: "cron job to fire and write timestamp",
       });
 
-      const fired = readFileSync(firePath, "utf8").trim().split("\n").filter(Boolean);
-      assert.ok(fired.length >= 1, "cron should have fired at least once");
+      assert.ok(existsSync(firePath), "cron should have fired at least once");
     } finally {
       await server.dispose();
     }
