@@ -1,11 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
 import http from "node:http";
 import { reservePort, doRequest, startAtermServer } from "../test/functional-harness.js";
-
-const ANVIL_SERVER_PATH = process.env.ANVIL_SERVER_PATH
-  ?? "/Volumes/SanDisk1Tb/open-anvil/mcp-server/server.js";
 
 /** Opt-in: only run when ATERM_BRIDGE_TEST=1. Requires Open Anvil + Chrome extension. */
 const bridgeTestEnabled = process.env.ATERM_BRIDGE_TEST === "1";

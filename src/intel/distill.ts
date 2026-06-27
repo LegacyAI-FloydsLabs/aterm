@@ -302,7 +302,6 @@ function distillSummary(raw: string, maxLines = 50): string {
 // ---------------------------------------------------------------------------
 
 const PROMPT_LINE_RE = /^(?:[^$#❯➜λ→]*[$#❯➜λ→]\s|>>>\s|In \[\d+\]:\s)/;
-const ERROR_LINE_RE = /(?:error|Error|ERROR|FAIL|FATAL|traceback|panic|exception)/i;
 
 interface StructuredResult {
   segments: StructuredSegment[];

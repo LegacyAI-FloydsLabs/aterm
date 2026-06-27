@@ -15,7 +15,7 @@ import crypto from "node:crypto";
 // Mock SessionManager — no real PTY, in-memory sessions
 // ---------------------------------------------------------------------------
 function createMockManager(): any {
-  const mgr = new EventEmitter();
+  const mgr: any = new EventEmitter();
   const sessions = new Map<string, any>();
 
   function find(idOrName: string) {
